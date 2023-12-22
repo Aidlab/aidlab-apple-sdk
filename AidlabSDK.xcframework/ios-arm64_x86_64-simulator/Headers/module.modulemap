@@ -1,0 +1,4 @@
+module AidlabSDK {
+    header "shared.h"
+    export *
+}
