@@ -322,7 +322,7 @@ public class Device: NSObject {
     private let didReceiveBodyPosition: callbackBodyPosition = { (context, timestamp, bodyPosition) in
         guard let context_ = context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context_).takeUnretainedValue()
-        self_.deviceDelegate?.didReceiveBodyPosition(self_, timestamp: timestamp, bodyPosition: bodyPosition)
+        self_.deviceDelegate?.didReceiveBodyPosition(self_, timestamp: timestamp, bodyPosition: BodyPosition(bodyPosition: bodyPosition))
     }
 
     private let didReceiveHeartRate: callbackHeartRate = { (context, timestamp, heartRate) in
@@ -346,7 +346,7 @@ public class Device: NSObject {
     private let wearStateDidChange: callbackWearState = { (context, state) in
         guard let context_ = context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context_).takeUnretainedValue()
-        self_.deviceDelegate?.wearStateDidChange(self_, state: state)
+        self_.deviceDelegate?.wearStateDidChange(self_, state: WearState(wearState: state))
     }
 
     private let didReceiveSoundVolume: callbackSoundVolume = { (context, timestamp, soundVolume) in
@@ -365,19 +365,19 @@ public class Device: NSObject {
     private let pressureWearStateDidChange: callbackWearState = { (context, state) in
         guard let context_ = context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context_).takeUnretainedValue()
-        self_.deviceDelegate?.pressureWearStateDidChange(self_, wearState: state)
+        self_.deviceDelegate?.pressureWearStateDidChange(self_, wearState: WearState(wearState: state))
     }
 
     private let didDetect: callback_function = { (context, exercise) in
         guard let context_ = context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context_).takeUnretainedValue()
-        self_.deviceDelegate?.didDetect(self_, exercise: exercise)
+        self_.deviceDelegate?.didDetect(self_, exercise: Exercise(exercise: exercise))
     }
 
     private let didDetectActivity: callbackActivity = { (context, timestamp, activity) in
         guard let context_ = context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context_).takeUnretainedValue()
-        self_.deviceDelegate?.didDetect(self_, timestamp: timestamp, activity: activity)
+        self_.deviceDelegate?.didDetect(self_, timestamp: timestamp, activity: ActivityType(activityType: activity))
     }
 
     private let didReceiveCommand: callbackReceivedCommand = { (context) in
@@ -470,7 +470,7 @@ public class Device: NSObject {
     private let syncStateDidChange: callbackSyncState = { (context, state) in
         guard let context_ = context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context_).takeUnretainedValue()
-        self_.deviceDelegate?.syncStateDidChange(self_, state: state)
+        self_.deviceDelegate?.syncStateDidChange(self_, state: SyncState(syncState: state))
     }
 
     private let didReceiveUnsynchronizedSize: callbackUnsynchronizedSize = { (context, unsynchronizedSize, syncBytesPerSecond) in
@@ -488,7 +488,7 @@ public class Device: NSObject {
     private let didReceivePastActivity: callbackActivity = { (context, timestamp, activity) in
         guard let context_ = context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context_).takeUnretainedValue()
-        self_.deviceDelegate?.didReceivePastActivity(self_, timestamp: timestamp, activity: activity)
+        self_.deviceDelegate?.didReceivePastActivity(self_, timestamp: timestamp, activity: ActivityType(activityType: activity))
     }
 
     private let didReceivePastSteps: callbackSteps = { (context, timestamp, value) in
@@ -553,7 +553,7 @@ public class Device: NSObject {
     private let didReceivePastBodyPosition: callbackBodyPosition = { (context, timestamp, bodyPosition) in
         guard let context_ = context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context_).takeUnretainedValue()
-        self_.deviceDelegate?.didReceivePastBodyPosition(self_, timestamp: timestamp, bodyPosition: bodyPosition)
+        self_.deviceDelegate?.didReceivePastBodyPosition(self_, timestamp: timestamp, bodyPosition: BodyPosition(bodyPosition: bodyPosition))
     }
 
     private let didDetectPastUserEvent: callbackSamplesTime = { (context, timestamp, data, size) in

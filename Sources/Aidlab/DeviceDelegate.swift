@@ -6,12 +6,6 @@
 import Foundation
 import AidlabSDK
 
-public typealias BodyPosition = AidlabSDK.BodyPosition
-public typealias ActivityType = AidlabSDK.ActivityType
-public typealias Exercise = AidlabSDK.Exercise
-public typealias WearState = AidlabSDK.WearState
-public typealias SyncState = AidlabSDK.SyncState
-
 public protocol DeviceDelegate {
 
     func didReceiveECG(_ device: Device, timestamp: UInt64, values: [Float])
