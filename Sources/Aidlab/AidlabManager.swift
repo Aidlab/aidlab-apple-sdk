@@ -1,7 +1,8 @@
 //
-//  Created by J Domaszewicz on 15.11.2016.
+//  Created by Jakub Domaszewicz on 15.11.2016.
 //  Copyright © 2016-2023 Aidlab. All rights reserved.
 //
+
 import CoreBluetooth
 import Foundation
 
@@ -24,11 +25,7 @@ public enum ScanMode: Int {
 }
 
 public class AidlabManager: NSObject, CBCentralManagerDelegate {
-    // -- Config ----------------------------------------
-
     public var legacyAutoPair: Bool = true
-
-    private let peripheralName = "Aidlab"
 
     public init(delegate: AidlabManagerDelegate) {
         self.delegate = delegate
@@ -103,9 +100,22 @@ public class AidlabManager: NSObject, CBCentralManagerDelegate {
         }
     }
 
-    var discoveredDevices: [UUID: Device] = [:]
+    // -- internal -------------------------------------------------------------
 
-    // -- Private ---------------------------------------------------------------
+    /// centralManager is static now, as nilling this property was leading to `[CoreBluetooth] XPC
+    /// connection invalid` and crash when device was trying to connect with
+    /// peripheral. Different approaches was examined:
+    /// * cleaning centralManager after X seconds
+    /// * stopping the scan
+    /// * waiting for power off (centralManagerDidUpdateState)
+    /// yet nothing helped. Apple's docs and Google don't state if CBCentralManager can be nilled or not.
+    static var centralManager: CBCentralManager?
+
+    // -- private --------------------------------------------------------------
+
+    private let peripheralName = "Aidlab"
+
+    private var discoveredDevices: [UUID: Device] = [:]
 
     private func isPowerOn(central: CBCentralManager) -> Bool {
         if #available(iOS 10.0, *) {
@@ -114,16 +124,6 @@ public class AidlabManager: NSObject, CBCentralManagerDelegate {
             central.state.rawValue == CBCentralManagerState.poweredOn.rawValue
         }
     }
-
-    /// _centralManager is static now, as nilling this property was leading to
-    /// `[CoreBluetooth] XPC connection invalid` and crash when device was
-    /// trying to connect with peripheral. Different approaches was examined:
-    /// * cleaning _centralManager after X seconds
-    /// * stopping the scan
-    /// * waiting for power off (centralManagerDidUpdateState)
-    /// yet nothing helped. Apple's docs and Google don't state if
-    /// CBCentralManager can be nilled or not.
-    static var centralManager: CBCentralManager?
 
     private var shouldScan: Bool
 

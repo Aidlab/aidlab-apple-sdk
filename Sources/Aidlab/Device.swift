@@ -205,7 +205,7 @@ public class Device: NSObject {
         }
     }
 
-    // -- Private --------------------------------------------------------------
+    // -- private --------------------------------------------------------------
 
     private func startCollectData() {
         guard let aidlabSDK else { return }
