@@ -24,15 +24,13 @@ public enum ScanMode: Int {
 }
 
 public class AidlabManager: NSObject, CBCentralManagerDelegate {
-
     // -- Config ----------------------------------------
-    
+
     public var legacyAutoPair: Bool = true
 
     private let peripheralName = "Aidlab"
 
     public init(delegate: AidlabManagerDelegate) {
-
         self.delegate = delegate
 
         shouldScan = false
@@ -41,9 +39,8 @@ public class AidlabManager: NSObject, CBCentralManagerDelegate {
     }
 
     public func scan(scanMode: ScanMode = .lowPower) {
-        
         self.scanMode = scanMode
-        
+
         /// CBCentralManager call's for Bluetooth permision
         /// that's why we initialize it here.
         if AidlabManager.centralManager == nil {
@@ -64,15 +61,12 @@ public class AidlabManager: NSObject, CBCentralManagerDelegate {
     }
 
     public func stopScan() {
-
         shouldScan = false
         AidlabManager.centralManager?.stopScan()
     }
 
     public func centralManagerDidUpdateState(_ central: CBCentralManager) {
-
         if central.state == .poweredOff {
-
             /// Nothing to do
 
         } else if shouldScan {
@@ -80,31 +74,26 @@ public class AidlabManager: NSObject, CBCentralManagerDelegate {
         }
     }
 
-    public func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
-
+    public func centralManager(_: CBCentralManager, didConnect peripheral: CBPeripheral) {
         discoveredDevices[peripheral.identifier]?.onDidConnect()
     }
 
-    public func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
-
+    public func centralManager(_: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
         discoveredDevices[peripheral.identifier]?.onFailToConnect(error: error)
         discoveredDevices[peripheral.identifier] = nil
     }
 
-    public func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
-
+    public func centralManager(_: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         discoveredDevices[peripheral.identifier]?.onDisconnectPeripheral(error: error)
         discoveredDevices[peripheral.identifier] = nil
     }
 
-    public func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, timestamp: CFAbsoluteTime, isReconnecting: Bool, error: Error?) {
-
+    public func centralManager(_: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, timestamp: CFAbsoluteTime, isReconnecting: Bool, error: Error?) {
         discoveredDevices[peripheral.identifier]?.onDisconnectPeripheral(timestamp: timestamp, isReconnecting: isReconnecting, error: error)
         discoveredDevices[peripheral.identifier] = nil
     }
 
-    public func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String: Any], rssi RSSI: NSNumber) {
-
+    public func centralManager(_: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData _: [String: Any], rssi RSSI: NSNumber) {
         if let existingDevice = discoveredDevices[peripheral.identifier] {
             existingDevice.rssi = RSSI
         } else if peripheral.name == peripheralName {
@@ -117,13 +106,12 @@ public class AidlabManager: NSObject, CBCentralManagerDelegate {
     var discoveredDevices: [UUID: Device] = [:]
 
     // -- Private ---------------------------------------------------------------
-    
-    private func isPowerOn(central: CBCentralManager) -> Bool {
 
+    private func isPowerOn(central: CBCentralManager) -> Bool {
         if #available(iOS 10.0, *) {
-            return central.state == CBManagerState.poweredOn
+            central.state == CBManagerState.poweredOn
         } else {
-            return central.state.rawValue == CBCentralManagerState.poweredOn.rawValue
+            central.state.rawValue == CBCentralManagerState.poweredOn.rawValue
         }
     }
 
@@ -135,7 +123,7 @@ public class AidlabManager: NSObject, CBCentralManagerDelegate {
     /// * waiting for power off (centralManagerDidUpdateState)
     /// yet nothing helped. Apple's docs and Google don't state if
     /// CBCentralManager can be nilled or not.
-    static internal var centralManager: CBCentralManager?
+    static var centralManager: CBCentralManager?
 
     private var shouldScan: Bool
 

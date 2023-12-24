@@ -2,11 +2,11 @@
 //  Created by Jakub Domaszewicz on 23/12/2023.
 //
 
-import Foundation
 import AidlabSDK
+import Foundation
 
 public enum WearState {
-    internal init(wearState: AidlabSDK.WearState) {
+    init(wearState: AidlabSDK.WearState) {
         switch wearState {
         case AidlabSDK.placedProperly:
             self = .placedProperly

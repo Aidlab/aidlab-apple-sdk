@@ -7,12 +7,13 @@ let package = Package(
         .iOS(.v14),
         .macOS(.v11),
         .tvOS(.v14),
-        .watchOS(.v8)
+        .watchOS(.v8),
     ],
     products: [
         .library(
             name: "Aidlab",
-            targets: ["Aidlab"]),
+            targets: ["Aidlab"]
+        ),
     ],
     targets: [
         .binaryTarget(
@@ -23,8 +24,8 @@ let package = Package(
             name: "Aidlab",
             dependencies: ["AidlabSDK"],
             linkerSettings: [
-                .linkedLibrary("c++")
+                .linkedLibrary("c++"),
             ]
-        )
+        ),
     ]
 )

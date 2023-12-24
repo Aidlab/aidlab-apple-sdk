@@ -2,11 +2,11 @@
 //  Created by Jakub Domaszewicz on 23/12/2023.
 //
 
-import Foundation
 import AidlabSDK
+import Foundation
 
 public enum Exercise {
-    internal init(exercise: AidlabSDK.Exercise) {
+    init(exercise: AidlabSDK.Exercise) {
         switch exercise {
         case AidlabSDK.none:
             self = .none

@@ -6,16 +6,15 @@
 import Foundation
 
 class AidlabError: NSObject, LocalizedError {
-    
     var message = ""
-    
+
     init(message: String) { self.message = message }
-    
+
     override var description: String {
-        return "AidlabError: \(message)"
+        "AidlabError: \(message)"
     }
-    
+
     var errorDescription: String? {
-        return self.description
+        description
     }
 }

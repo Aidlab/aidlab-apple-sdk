@@ -3,11 +3,10 @@
 //  Copyright © 2020-2023 Aidlab. All rights reserved.
 //
 
-import Foundation
 import AidlabSDK
+import Foundation
 
-public protocol DeviceDelegate {
-
+public protocol DeviceDelegate: AnyObject {
     func didReceiveECG(_ device: Device, timestamp: UInt64, values: [Float])
 
     func didReceiveRespiration(_ device: Device, timestamp: UInt64, values: [Float])
@@ -19,27 +18,27 @@ public protocol DeviceDelegate {
     func didReceiveSkinTemperature(_ device: Device, timestamp: UInt64, value: Float)
 
     func didReceiveAccelerometer(_ device: Device, timestamp: UInt64, ax: Float, ay: Float, az: Float)
-    
+
     func didReceiveGyroscope(_ device: Device, timestamp: UInt64, qx: Float, qy: Float, qz: Float)
-    
+
     func didReceiveMagnetometer(_ device: Device, timestamp: UInt64, mx: Float, my: Float, mz: Float)
-    
+
     func didReceiveQuaternion(_ device: Device, timestamp: UInt64, qw: Float, qx: Float, qy: Float, qz: Float)
 
     func didReceiveOrientation(_ device: Device, timestamp: UInt64, roll: Float, pitch: Float, yaw: Float)
-    
+
     func didReceiveBodyPosition(_ device: Device, timestamp: UInt64, bodyPosition: BodyPosition)
 
     func didReceiveHeartRate(_ device: Device, timestamp: UInt64, heartRate: Int32)
-    
+
     func didReceiveRr(_ device: Device, timestamp: UInt64, rr: Int32)
 
     func didReceiveRespirationRate(_ device: Device, timestamp: UInt64, value: UInt32)
 
     func didReceiveSoundVolume(_ device: Device, timestamp: UInt64, soundVolume: UInt16)
-    
+
     func didDetect(_ device: Device, exercise: Exercise)
-    
+
     func didDetect(_ device: Device, timestamp: UInt64, activity: ActivityType)
 
     func didDisconnect(_ device: Device, reason: DisconnectReason)
@@ -50,19 +49,19 @@ public protocol DeviceDelegate {
 
     func didUpdateRSSI(_ device: Device, rssi: Int32)
     /**
-    * Called when a significant change of wear state did occur. You can use
-    * that information to make decisions when to start processing data, or
-    * display short user guide how to wear Aidlab in your app.
-    * @param  wearState    Current wear state.
-    */
+     * Called when a significant change of wear state did occur. You can use
+     * that information to make decisions when to start processing data, or
+     * display short user guide how to wear Aidlab in your app.
+     * @param  wearState    Current wear state.
+     */
     func wearStateDidChange(_ device: Device, state: WearState)
-        
+
     func didReceiveCommand(_ device: Device)
-    
+
     func didReceiveMessage(_ device: Device, process: String, message: String)
-        
+
     func didDetectUserEvent(_ device: Device, timestamp: UInt64)
-    
+
     func didReceiveSignalQuality(_ timestamp: UInt64, value: Int32)
 
     func syncStateDidChange(_ device: Device, state: SyncState)

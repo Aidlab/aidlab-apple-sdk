@@ -2,11 +2,11 @@
 //  Created by Jakub Domaszewicz on 23/12/2023.
 //
 
-import Foundation
 import AidlabSDK
+import Foundation
 
 public enum ActivityType {
-    internal init(activityType: AidlabSDK.ActivityType) {
+    init(activityType: AidlabSDK.ActivityType) {
         switch activityType {
         case AidlabSDK.unspecific:
             self = .unspecific

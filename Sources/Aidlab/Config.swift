@@ -5,7 +5,6 @@
 
 import Foundation
 
-class Config {
-
-    static private(set) var supportedAidlabVersion = 7
+enum Config {
+    private(set) static var supportedAidlabVersion = 7
 }

@@ -2,11 +2,11 @@
 //  Created by Jakub Domaszewicz on 23/12/2023.
 //
 
-import Foundation
 import AidlabSDK
+import Foundation
 
 public enum SyncState {
-    internal init(syncState: AidlabSDK.SyncState) {
+    init(syncState: AidlabSDK.SyncState) {
         switch syncState {
         case AidlabSDK.start:
             self = .start

@@ -2,23 +2,18 @@
 //  Created by Jakub Domaszewicz on 21/12/2023.
 //
 
-import Foundation
-import CoreBluetooth
 import AidlabSDK
+import CoreBluetooth
+import Foundation
 
 extension Device {
-
-    internal func onFailToConnect(error: Error?) {
-
+    func onFailToConnect(error: Error?) {
         deviceDelegate?.didReceiveError(self, error: AidlabError(message: "AidlabSDK: didFailToConnect \(error?.localizedDescription ?? "")"))
     }
 
-    internal func onDisconnectPeripheral(timestamp: CFAbsoluteTime, isReconnecting: Bool, error: Error?) {
+    func onDisconnectPeripheral(timestamp _: CFAbsoluteTime, isReconnecting _: Bool, error _: Error?) {}
 
-    }
-
-    internal func onDidConnect() {
-
+    func onDidConnect() {
         createAidlabSDK()
 
         peripheral.discoverServices(readWriteServices)
@@ -28,14 +23,12 @@ extension Device {
         }
     }
 
-    internal func onDisconnectPeripheral(error: Error?) {
-
+    func onDisconnectPeripheral(error: Error?) {
         alreadySubscribed.removeAll()
 
         var disconnectReason = DisconnectReason.deviceDisconnected
 
         if let error = error as NSError? {
-
             if error.code == 6 {
                 disconnectReason = .timeout
             } else if error.code == 7 {
