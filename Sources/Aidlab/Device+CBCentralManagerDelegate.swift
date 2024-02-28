@@ -50,8 +50,8 @@ extension Device {
 
         peripheral.delegate = nil
 
-        AidlabSDK_destroy(aidlabSDK)
         AidlabSDK_did_disconnect(aidlabSDK)
+        AidlabSDK_destroy(aidlabSDK)
         aidlabSDK = nil
 
         deviceDelegate?.didDisconnect(self, reason: disconnectReason)
