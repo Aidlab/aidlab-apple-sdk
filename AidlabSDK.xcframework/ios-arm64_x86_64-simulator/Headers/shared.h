@@ -1,7 +1,4 @@
 //
-//  shared.h
-//  Aidlab-SDK
-//
 //  Created by Szymon Gesicki on 29.02.2020.
 //  Copyright © 2017-2023 Aidlab. All rights reserved.
 //
@@ -129,40 +126,41 @@ SHARED_EXPORT void AidlabSDK_init_synchronization_callbacks(
     callbackOrientation orientation, callbackMagnetometer magnetometer, callbackBodyPosition bodyPosition,
     callbackRr rr, callbackSignalQuality signalQuality, void* aidlabSDK, void* context);
 
-SHARED_EXPORT void processECGPackage(uint8_t* data, int size, void* aidlabSDK);
-SHARED_EXPORT void processTemperaturePackage(uint8_t* data, int size, void* aidlabSDK);
-SHARED_EXPORT void processActivityPackage(uint8_t* data, int size, void* aidlabSDK);
-SHARED_EXPORT void processBatteryPackage(uint8_t* data, int size, void* aidlabSDK);
-SHARED_EXPORT void processMotionPackage(uint8_t* data, int size, void* aidlabSDK);
-SHARED_EXPORT void processRespirationPackage(uint8_t* data, int size, void* aidlabSDK);
-SHARED_EXPORT void processStepsPackage(uint8_t* data, int size, void* aidlabSDK);
-SHARED_EXPORT void processOrientationPackage(uint8_t* data, int size, void* aidlabSDK);
-SHARED_EXPORT void processHealthThermometerPackage(uint8_t* data, int size, void* aidlabSDK);
-SHARED_EXPORT void processHeartRatePackage(uint8_t* data, int size, void* aidlabSDK);
-SHARED_EXPORT void processSoundVolumePackage(uint8_t* data, int size, void* aidlabSDK);
-SHARED_EXPORT void processCMD(uint8_t* data, int size, void* aidlabSDK);
+SHARED_EXPORT void processECGPackage(const uint8_t* data, int size, void* aidlabSDK);
+SHARED_EXPORT void processTemperaturePackage(const uint8_t* data, int size, void* aidlabSDK);
+SHARED_EXPORT void processActivityPackage(const uint8_t* data, int size, void* aidlabSDK);
+SHARED_EXPORT void processBatteryPackage(const uint8_t* data, int size, void* aidlabSDK);
+SHARED_EXPORT void processMotionPackage(const uint8_t* data, int size, void* aidlabSDK);
+SHARED_EXPORT void processRespirationPackage(const uint8_t* data, int size, void* aidlabSDK);
+SHARED_EXPORT void processStepsPackage(const uint8_t* data, int size, void* aidlabSDK);
+SHARED_EXPORT void processOrientationPackage(const uint8_t* data, int size, void* aidlabSDK);
+SHARED_EXPORT void processHealthThermometerPackage(const uint8_t* data, int size, void* aidlabSDK);
+SHARED_EXPORT void processHeartRatePackage(const uint8_t* data, int size, void* aidlabSDK);
+SHARED_EXPORT void processSoundVolumePackage(const uint8_t* data, int size, void* aidlabSDK);
+SHARED_EXPORT void processCMD(const uint8_t* data, int size, void* aidlabSDK);
 SHARED_EXPORT void setHardwareRevision(uint8_t* hwRevision, int size, void* aidlabSDK);
 SHARED_EXPORT void setFirmwareRevision(uint8_t* fwRevision, int size, void* aidlabSDK);
-SHARED_EXPORT void processNasalCannulaPackage(uint8_t* data, int size, void* aidlabSDK);
-SHARED_EXPORT void processSoundFeaturesPackage(uint8_t* data, int size, void* aidlabSDK);
+SHARED_EXPORT void processNasalCannulaPackage(const uint8_t* data, int size, void* aidlabSDK);
+SHARED_EXPORT void processSoundFeaturesPackage(const uint8_t* data, int size, void* aidlabSDK);
 
 SHARED_EXPORT void AidlabSDK_did_connect(void* aidlabSDK);
 SHARED_EXPORT void AidlabSDK_did_disconnect(void* aidlabSDK);
 
 SHARED_EXPORT void setAggressiveECGFiltration(bool value, void* aidlabSDK);
 SHARED_EXPORT uint8_t* get_command(char* message, void* aidlabSDK);
-SHARED_EXPORT uint8_t* get_collect_command(uint8_t* realSignals, int realSize, uint8_t* syncSignals, int syncSize,
-                                           void* aidlabSDK);
+SHARED_EXPORT uint8_t* get_collect_command(const uint8_t* realSignals, int realSize, const uint8_t* syncSignals,
+                                           int syncSize, void* aidlabSDK);
 SHARED_EXPORT void AidlabSDK_destroy(void* aidlabSDK);
 SHARED_EXPORT void internalProcessCMD(
-    uint8_t* data, int size, callbackSamplesTime ecg, callbackSamplesTime respiration, callbackSampleTime temperature,
-    callbackAccelerometer accelerometer, callbackGyroscope gyroscope, callbackMagnetometer magnetometer,
-    callbackBatteryLevel battery, callbackActivity activity, callbackSteps steps, callbackOrientation orientation,
-    callbackQuaternion quaternion, callbackRespirationRate respirationRate, callbackWearState wearState,
-    callbackHeartRate heartRate, callbackRr rr, callbackSoundVolume soundVolume, callback_function exercise,
-    callbackReceivedCommand receivedCommand, callbackMessage receivedMessage, callbackUserEvent userEvent,
-    callbackPressure pressure, callbackWearState pressureWearState, callbackBodyPosition bodyPosition,
-    callbackError callbackError, callbackSignalQuality signalQuality, void* aidlabSDK, void* context);
+    const uint8_t* data, int size, callbackSamplesTime ecg, callbackSamplesTime respiration,
+    callbackSampleTime temperature, callbackAccelerometer accelerometer, callbackGyroscope gyroscope,
+    callbackMagnetometer magnetometer, callbackBatteryLevel battery, callbackActivity activity, callbackSteps steps,
+    callbackOrientation orientation, callbackQuaternion quaternion, callbackRespirationRate respirationRate,
+    callbackWearState wearState, callbackHeartRate heartRate, callbackRr rr, callbackSoundVolume soundVolume,
+    callback_function exercise, callbackReceivedCommand receivedCommand, callbackMessage receivedMessage,
+    callbackUserEvent userEvent, callbackPressure pressure, callbackWearState pressureWearState,
+    callbackBodyPosition bodyPosition, callbackError callbackError, callbackSignalQuality signalQuality,
+    void* aidlabSDK, void* context);
 
 #ifdef __cplusplus
 }

@@ -12,7 +12,7 @@ public class Device: NSObject {
     public var hardwareRevision: String?
     public var serialNumber: String?
     public var manufaturerName: String?
-    public var address: UUID?
+    public var address: UUID
     public var rssi: NSNumber
 
     init(peripheral: CBPeripheral, rssi: NSNumber) {
@@ -189,7 +189,7 @@ public class Device: NSObject {
                                  aidlabSDK,
                                  context)
 
-        AidlabSDK_init_synchronization_callbacks(syncStateDidChange, didReceiveUnsynchronizedSize, didReceiveECG, didReceiveRespiration, didReceiveSkinTemperature, didReceiveHeartRate, didReceiveRr, didDetectActivity, didReceiveRespirationRate, didReceiveSteps, didDetectUserEvent, didReceiveSoundVolume, didReceivePressure, didReceiveAccelerometer, didReceiveGyroscope, didReceiveQuaternion, didReceiveOrientation, didReceiveMagnetometer, didReceiveBodyPosition, didReceiveRr, didReceiveSignalQuality, aidlabSDK, context)
+        AidlabSDK_init_synchronization_callbacks(syncStateDidChange, didReceiveUnsynchronizedSize, didReceivePastECG, didReceivePastRespiration, didReceivePastSkinTemperature, didReceivePastHeartRate, didReceivePastRr, didReceivePastActivity, didReceivePastRespirationRate, didReceivePastSteps, didDetectPastUserEvent, didReceivePastSoundVolume, didReceivePastPressure, didReceivePastAccelerometer, didReceivePastGyroscope, didReceivePastQuaternion, didReceivePastOrientation, didReceivePastMagnetometer, didReceivePastBodyPosition, didReceivePastRr, didReceivePastSignalQuality, aidlabSDK, context)
     }
 
     func checkCompatibility() -> Bool {
