@@ -1,22 +1,21 @@
 //
 //  Created by Jakub Domaszewicz on 21/12/2023.
-//  Copyright © 2023 Aidlab. All rights reserved.
+//  Copyright © 2023-2024 Aidlab. All rights reserved.
 //
 
 import CoreBluetooth
 import Foundation
 
-let signalsUUID: [DataType: [CBUUID]] = [
-    DataType.battery: [batteryCharacteristicUUID, BatteryLevelService.batteryLevelCharacteristic],
-    DataType.activity: [MotionService.activityUUID],
-    DataType.steps: [MotionService.stepsUUID],
-    DataType.orientation: [MotionService.orientationUUID],
-    DataType.heartRate: [HeartRateService.heartRateMeasurementCharacteristic],
-    DataType.soundVolume: [soundVolumeCharacteristicUUID],
-    DataType.skinTemperature: [temperatureCharacteristicUUID],
-    DataType.motion: [motionCharacteristicUUID],
-    DataType.ecg: [ecgCharacteristicUUID],
-    DataType.respiration: [respirationCharacteristicUUID],
+let signalsUUID: [DataType: CBUUID] = [
+    DataType.activity: MotionService.activityUUID,
+    DataType.steps: MotionService.stepsUUID,
+    DataType.orientation: MotionService.orientationUUID,
+    DataType.heartRate: HeartRateService.heartRateMeasurementCharacteristic,
+    DataType.soundVolume: soundVolumeCharacteristicUUID,
+    DataType.skinTemperature: temperatureCharacteristicUUID,
+    DataType.motion: motionCharacteristicUUID,
+    DataType.ecg: ecgCharacteristicUUID,
+    DataType.respiration: respirationCharacteristicUUID,
 ]
 
 let userServiceUUID = CBUUID(string: "44366E80-CF3A-11E1-9AB4-0002A5D5C51B")

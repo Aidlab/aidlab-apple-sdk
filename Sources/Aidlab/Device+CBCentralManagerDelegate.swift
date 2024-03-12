@@ -1,6 +1,6 @@
 //
 //  Created by Jakub Domaszewicz on 21/12/2023.
-//  Copyright © 2023 Aidlab. All rights reserved.
+//  Copyright © 2023-2024 Aidlab. All rights reserved.
 //
 
 import AidlabSDK
@@ -9,14 +9,16 @@ import Foundation
 
 extension Device {
     func onFailToConnect(error: Error?) {
-        deviceDelegate?.didReceiveError(self, error: AidlabError(message: "AidlabSDK: didFailToConnect \(error?.localizedDescription ?? "")"))
+        if let error {
+            deviceDelegate?.didReceiveError(self, error: error)
+        } else {
+            deviceDelegate?.didReceiveError(self, error: AidlabError(message: "Fail to connect"))
+        }
     }
 
     func onDisconnectPeripheral(timestamp _: CFAbsoluteTime, isReconnecting _: Bool, error _: Error?) {}
 
     func onDidConnect() {
-        createAidlabSDK()
-
         peripheral.discoverServices(readWriteServices)
 
         for i in notifyServices {
@@ -25,8 +27,6 @@ extension Device {
     }
 
     func onDisconnectPeripheral(error: Error?) {
-        alreadySubscribed.removeAll()
-
         var disconnectReason = DisconnectReason.deviceDisconnected
 
         if let error = error as NSError? {
@@ -38,19 +38,16 @@ extension Device {
                 disconnectReason = .unknownError
             }
 
-            deviceDelegate?.didReceiveError(self, error: AidlabError(message: "AidlabSDK.didDisconnectPeripheral \(error.localizedDescription)"))
+            deviceDelegate?.didReceiveError(self, error: error)
         }
 
         if !checkCompatibility() {
-            deviceDelegate?.didReceiveError(self, error: AidlabError(message: "AidlabSDK.didDisconnectPeripheral - unsupported SDK"))
+            deviceDelegate?.didReceiveError(self, error: AidlabError(message: "Unsupported SDK"))
             disconnectReason = .sdkOutdated
         }
 
-        stopTimer()
-
         peripheral.delegate = nil
 
-        AidlabSDK_did_disconnect(aidlabSDK)
         AidlabSDK_destroy(aidlabSDK)
         aidlabSDK = nil
 

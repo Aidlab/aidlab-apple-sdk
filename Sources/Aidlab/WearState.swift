@@ -1,6 +1,6 @@
 //
 //  Created by Jakub Domaszewicz on 23/12/2023.
-//  Copyright © 2023 Aidlab. All rights reserved.
+//  Copyright © 2023-2024 Aidlab. All rights reserved.
 //
 
 import AidlabSDK

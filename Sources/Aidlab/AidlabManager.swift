@@ -1,6 +1,6 @@
 //
 //  Created by Jakub Domaszewicz on 15.11.2016.
-//  Copyright © 2016-2023 Aidlab. All rights reserved.
+//  Copyright © 2016-2024 Aidlab. All rights reserved.
 //
 
 import CoreBluetooth
@@ -77,30 +77,23 @@ public class AidlabManager: NSObject, CBCentralManagerDelegate {
 
     public func centralManager(_: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
         discoveredDevices[peripheral.identifier]?.onFailToConnect(error: error)
-        discoveredDevices[peripheral.identifier] = nil
     }
 
     public func centralManager(_: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         discoveredDevices[peripheral.identifier]?.onDisconnectPeripheral(error: error)
-        discoveredDevices[peripheral.identifier] = nil
     }
 
     public func centralManager(_: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, timestamp: CFAbsoluteTime, isReconnecting: Bool, error: Error?) {
         discoveredDevices[peripheral.identifier]?.onDisconnectPeripheral(timestamp: timestamp, isReconnecting: isReconnecting, error: error)
-        discoveredDevices[peripheral.identifier] = nil
     }
 
     public func centralManager(_: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData _: [String: Any], rssi RSSI: NSNumber) {
-        if let existingDevice = discoveredDevices[peripheral.identifier] {
-            existingDevice.rssi = RSSI
-        } else if peripheral.name == peripheralName {
-            let newDevice = Device(peripheral: peripheral, rssi: RSSI)
-            discoveredDevices[peripheral.identifier] = newDevice
-            delegate?.didDiscover(newDevice)
-        }
+        let newDevice = Device(peripheral: peripheral, rssi: RSSI)
+        discoveredDevices[peripheral.identifier] = newDevice
+        delegate?.didDiscover(newDevice)
     }
 
-    // -- internal -------------------------------------------------------------
+    // -- Internal -------------------------------------------------------------
 
     /// centralManager is static now, as nilling this property was leading to `[CoreBluetooth] XPC
     /// connection invalid` and crash when device was trying to connect with
@@ -111,9 +104,7 @@ public class AidlabManager: NSObject, CBCentralManagerDelegate {
     /// yet nothing helped. Apple's docs and Google don't state if CBCentralManager can be nilled or not.
     static var centralManager: CBCentralManager?
 
-    // -- private --------------------------------------------------------------
-
-    private let peripheralName = "Aidlab"
+    // -- Private --------------------------------------------------------------
 
     private var discoveredDevices: [UUID: Device] = [:]
 
