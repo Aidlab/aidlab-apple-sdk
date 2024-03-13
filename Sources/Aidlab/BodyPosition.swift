@@ -12,9 +12,9 @@ public enum BodyPosition {
         case AidlabSDK.undefined:
             self = .undefined
         case AidlabSDK.front:
-            self = .front
+            self = .prone
         case AidlabSDK.back:
-            self = .back
+            self = .supine
         case AidlabSDK.leftSide:
             self = .leftSide
         case AidlabSDK.rightSide:
@@ -25,8 +25,8 @@ public enum BodyPosition {
     }
 
     case undefined
-    case front
-    case back
+    case prone
+    case supine
     case leftSide
     case rightSide
 }

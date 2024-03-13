@@ -1,6 +1,6 @@
 //
 //  Created by J Domaszewicz on 10.11.2016.
-//  Copyright © 2016-2023 Aidlab. All rights reserved.
+//  Copyright © 2016-2024 Aidlab. All rights reserved.
 //
 
 import AidlabSDK
@@ -97,13 +97,12 @@ public class Device: NSObject {
             }
 
         } else { /// Legacy
-
             if let characteristic = discoveredCharacteristics.first(where: { $0.uuid == batteryCharacteristicUUID }) {
                 peripheral.setNotifyValue(true, for: characteristic)
             }
 
             for dataType in dataTypes {
-                if let characteristic = signalsUUID[dataType] {
+                if let characteristic = dataTypesUUID[dataType] {
                     if let characteristic = discoveredCharacteristics.first(where: { $0.uuid == characteristic }) {
                         peripheral.setNotifyValue(true, for: characteristic)
                     }
@@ -129,7 +128,7 @@ public class Device: NSObject {
     var heartRatePackageCharacteristic: CBCharacteristic?
     var maxCmdPackageLength: Int = 20
 
-    /// Serial number, firmware, and hardware version is ready
+    /// Serial number, firmware, and hardware version are ready
     func didConnect() {
         if !checkCompatibility() {
             deviceDelegate?.didConnect(self)

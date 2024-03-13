@@ -15,7 +15,7 @@ public enum DataType: Int {
     case orientation = 6
     case steps = 7
     case heartRate = 8
-    // case healthThermometer = 9 // No longer in use. Use SKIN_TEMPERATURE instead.
+    // case healthThermometer = 9 // No longer in use. Use skinTemperature instead.
     case soundVolume = 10
     case rr = 11
     case pressure = 12 // # Supported since Firmware 3.0.0. No longer available as characteristic.
