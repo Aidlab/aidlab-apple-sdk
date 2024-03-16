@@ -7,9 +7,9 @@ import AidlabSDK
 import Foundation
 
 public protocol DeviceDelegate: AnyObject {
-    func didReceiveECG(_ device: Device, timestamp: UInt64, values: [Float])
+    func didReceiveECG(_ device: Device, timestamp: UInt64, value: Float)
 
-    func didReceiveRespiration(_ device: Device, timestamp: UInt64, values: [Float])
+    func didReceiveRespiration(_ device: Device, timestamp: UInt64, value: Float)
 
     func didReceiveBatteryLevel(_ device: Device, stateOfCharge: UInt8)
 
@@ -66,9 +66,9 @@ public protocol DeviceDelegate: AnyObject {
 
     func syncStateDidChange(_ device: Device, state: SyncState)
 
-    func didReceivePastECG(_ device: Device, timestamp: UInt64, values: [Float])
+    func didReceivePastECG(_ device: Device, timestamp: UInt64, value: Float)
 
-    func didReceivePastRespiration(_ device: Device, timestamp: UInt64, values: [Float])
+    func didReceivePastRespiration(_ device: Device, timestamp: UInt64, value: Float)
 
     func didReceivePastSkinTemperature(_ device: Device, timestamp: UInt64, value: Float)
 
@@ -99,7 +99,7 @@ public protocol DeviceDelegate: AnyObject {
 
     func didReceivePastBodyPosition(_ device: Device, timestamp: UInt64, bodyPosition: BodyPosition)
 
-    func didReceivePastPressure(_ device: Device, timestamp: UInt64, values: [Int32])
+    func didReceivePastPressure(_ device: Device, timestamp: UInt64, value: Int32)
 
     func didDetectPastUserEvent(_ device: Device, timestamp: UInt64)
 
@@ -107,5 +107,5 @@ public protocol DeviceDelegate: AnyObject {
 
     func pressureWearStateDidChange(_ device: Device, wearState: WearState)
 
-    func didReceivePressure(_ device: Device, timestamp: UInt64, values: [Int32])
+    func didReceivePressure(_ device: Device, timestamp: UInt64, value: Int32)
 }

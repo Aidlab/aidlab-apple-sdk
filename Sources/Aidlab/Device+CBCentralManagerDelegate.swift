@@ -20,10 +20,7 @@ extension Device {
 
     func onDidConnect() {
         peripheral.discoverServices(readWriteServices)
-
-        for i in notifyServices {
-            peripheral.discoverServices([i])
-        }
+        peripheral.discoverServices(notifyServices)
     }
 
     func onDisconnectPeripheral(error: Error?) {

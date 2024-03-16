@@ -59,7 +59,7 @@ extension Device: CBPeripheralDelegate {
         /// Device Information Characteristics
 
         if characteristic.uuid == DeviceInformationService.manufacturerNameStringCharacteristic {
-            manufaturerName = String(bytes: value, encoding: String.Encoding.utf8)
+            manufacturerName = String(bytes: value, encoding: String.Encoding.utf8)
         } else if characteristic.uuid == DeviceInformationService.serialNumberStringCharacteristic {
             if serialNumber != nil { return }
 

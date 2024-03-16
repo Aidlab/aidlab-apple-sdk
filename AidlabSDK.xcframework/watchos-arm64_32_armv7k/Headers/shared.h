@@ -75,11 +75,10 @@ typedef enum {
     invalidSize = 6,
 } UpdateError;
 
-typedef enum { undefined = 0, front = 1, back = 2, leftSide = 3, rightSide = 4 } BodyPosition;
+typedef enum { undefined = 0, prone = 1, supine = 2, leftSide = 3, rightSide = 4 } BodyPosition;
 
 typedef void (*callbackReceivedCommand)(void*);
 typedef void (*callbackSampleTime)(void*, uint64_t, float);
-typedef void (*callbackSamplesTime)(void*, uint64_t, float*, int);
 typedef void (*callbackActivity)(void*, uint64_t, ActivityType);
 typedef void (*callbackRespirationRate)(void*, uint64_t, uint32_t);
 typedef void (*callbackSteps)(void*, uint64_t, uint64_t);
@@ -94,8 +93,8 @@ typedef void (*callbackQuaternion)(void*, uint64_t, float, float, float, float);
 typedef void (*callbackHeartRate)(void*, uint64_t, int);
 typedef void (*callbackRr)(void*, uint64_t, int);
 typedef void (*callbackSoundVolume)(void*, uint64_t, uint16_t);
-typedef void (*callbackPressure)(void*, uint64_t, int*, int);
-typedef void (*callbackSoundFeatures)(void*, float*, int);
+typedef void (*callbackPressure)(void*, uint64_t, int);
+typedef void (*callbackSoundFeatures)(void*, uint64_t, float*, int);
 typedef void (*callbackSignalQuality)(void*, uint64_t, uint8_t);
 typedef void (*callbackUnsynchronizedSize)(void*, uint32_t, float);
 typedef void (*callbackSyncState)(void*, SyncState);
@@ -110,7 +109,7 @@ SHARED_EXPORT void* AidlabSDK_create();
 SHARED_EXPORT void AidlabSDK_destroy(void* aidlabSDK);
 
 SHARED_EXPORT void AidlabSDK_init_callbacks(
-    callbackSamplesTime ecg, callbackSamplesTime respiration, callbackSampleTime temperature,
+    callbackSampleTime ecg, callbackSampleTime respiration, callbackSampleTime temperature,
     callbackAccelerometer accelerometer, callbackGyroscope gyroscope, callbackMagnetometer magnetometer,
     callbackBatteryLevel battery, callbackActivity activity, callbackSteps steps, callbackOrientation orientation,
     callbackQuaternion quaternion, callbackRespirationRate respirationRate, callbackWearState wearState,
@@ -120,8 +119,8 @@ SHARED_EXPORT void AidlabSDK_init_callbacks(
     callbackError callbackError, callbackSignalQuality signalQuality, void* aidlabSDK);
 
 SHARED_EXPORT void AidlabSDK_init_synchronization_callbacks(
-    callbackSyncState syncState, callbackUnsynchronizedSize unsynchronizedSize, callbackSamplesTime pastEcg,
-    callbackSamplesTime pastRespiration, callbackSampleTime pastTemperature, callbackHeartRate pastHeartRate,
+    callbackSyncState syncState, callbackUnsynchronizedSize unsynchronizedSize, callbackSampleTime pastEcg,
+    callbackSampleTime pastRespiration, callbackSampleTime pastTemperature, callbackHeartRate pastHeartRate,
     callbackRr pastRr, callbackActivity pastActivity, callbackRespirationRate pastRespirationRate,
     callbackSteps pastSteps, callbackUserEvent userEvent, callbackSoundVolume soundVolume, callbackPressure pressure,
     callbackAccelerometer accelerometer, callbackGyroscope gyroscope, callbackQuaternion quaternion,

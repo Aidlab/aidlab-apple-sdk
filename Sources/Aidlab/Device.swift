@@ -12,7 +12,7 @@ public class Device: NSObject {
     public var firmwareRevision: String?
     public var hardwareRevision: String?
     public var serialNumber: String?
-    public var manufaturerName: String?
+    public var manufacturerName: String?
     public var address: UUID
     public var rssi: NSNumber
 
@@ -27,10 +27,6 @@ public class Device: NSObject {
         peripheral.delegate = self
     }
 
-    public func readRSSI() {
-        peripheral.readRSSI()
-    }
-
     public func connect(delegate: DeviceDelegate) {
         deviceDelegate = delegate
 
@@ -39,6 +35,10 @@ public class Device: NSObject {
 
     public func disconnect() {
         AidlabManager.centralManager?.cancelPeripheralConnection(peripheral)
+    }
+
+    public func readRSSI() {
+        peripheral.readRSSI()
     }
 
     public func startSynchronization() {
@@ -245,16 +245,16 @@ public class Device: NSObject {
 
     // -- AidlabSDK callback handlers ------------------------------------------
 
-    private let didReceiveECG: callbackSamplesTime = { context, timestamp, data, size in
+    private let didReceiveECG: callbackSampleTime = { context, timestamp, value in
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceiveECG(self_, timestamp: timestamp, values: Array(UnsafeBufferPointer(start: data, count: Int(size))))
+        self_.deviceDelegate?.didReceiveECG(self_, timestamp: timestamp, value: value)
     }
 
-    private let didReceiveRespiration: callbackSamplesTime = { context, timestamp, data, size in
+    private let didReceiveRespiration: callbackSampleTime = { context, timestamp, value in
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceiveRespiration(self_, timestamp: timestamp, values: Array(UnsafeBufferPointer(start: data, count: Int(size))))
+        self_.deviceDelegate?.didReceiveRespiration(self_, timestamp: timestamp, value: value)
     }
 
     private let didReceiveSkinTemperature: callbackSampleTime = { context, timestamp, value in
@@ -329,11 +329,10 @@ public class Device: NSObject {
         self_.deviceDelegate?.didReceiveSoundVolume(self_, timestamp: timestamp, soundVolume: soundVolume)
     }
 
-    private let didReceivePressure: callbackPressure = { context, timestamp, pressureValues, size in
+    private let didReceivePressure: callbackPressure = { context, timestamp, value in
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        let pressureValues = Array(UnsafeBufferPointer(start: pressureValues, count: Int(size)))
-        self_.deviceDelegate?.didReceivePressure(self_, timestamp: timestamp, values: pressureValues)
+        self_.deviceDelegate?.didReceivePressure(self_, timestamp: timestamp, value: value)
     }
 
     private let pressureWearStateDidChange: callbackWearState = { context, state in
@@ -381,7 +380,7 @@ public class Device: NSObject {
         self_.deviceDelegate?.didDetectUserEvent(self_, timestamp: timestamp)
     }
 
-    private let didReceiveSoundFeatures: callbackSoundFeatures = { _, _, _ in
+    private let didReceiveSoundFeatures: callbackSoundFeatures = { _, _, _, _ in
         /// Experimental
     }
 
@@ -416,16 +415,16 @@ public class Device: NSObject {
         self_.deviceDelegate?.didReceiveSteps(self_, timestamp: timestamp, value: value)
     }
 
-    private let didReceivePastECG: callbackSamplesTime = { context, timestamp, data, size in
+    private let didReceivePastECG: callbackSampleTime = { context, timestamp, value in
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceivePastECG(self_, timestamp: timestamp, values: Array(UnsafeBufferPointer(start: data, count: Int(size))))
+        self_.deviceDelegate?.didReceivePastECG(self_, timestamp: timestamp, value: value)
     }
 
-    private let didReceivePastRespiration: callbackSamplesTime = { context, timestamp, data, size in
+    private let didReceivePastRespiration: callbackSampleTime = { context, timestamp, value in
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceivePastRespiration(self_, timestamp: timestamp, values: Array(UnsafeBufferPointer(start: data, count: Int(size))))
+        self_.deviceDelegate?.didReceivePastRespiration(self_, timestamp: timestamp, value: value)
     }
 
     private let didReceivePastSkinTemperature: callbackSampleTime = { context, timestamp, value in
@@ -483,14 +482,13 @@ public class Device: NSObject {
         self_.deviceDelegate?.didReceivePastSoundVolume(self_, timestamp: timestamp, soundVolume: soundVolume)
     }
 
-    private let didReceivePastPressure: callbackPressure = { context, timestamp, values, size in
+    private let didReceivePastPressure: callbackPressure = { context, timestamp, value in
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        let pressureValues = Array(UnsafeBufferPointer(start: values, count: Int(size)))
-        self_.deviceDelegate?.didReceivePastPressure(self_, timestamp: timestamp, values: pressureValues)
+        self_.deviceDelegate?.didReceivePastPressure(self_, timestamp: timestamp, value: value)
     }
 
-    private let didReceivePastSoundFeatures: callbackSoundFeatures = { _, _, _ in
+    private let didReceivePastSoundFeatures: callbackSoundFeatures = { _, _, _, _ in
         /// Experimental
     }
 

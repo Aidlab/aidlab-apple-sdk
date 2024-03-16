@@ -11,9 +11,9 @@ public enum BodyPosition {
         switch bodyPosition {
         case AidlabSDK.undefined:
             self = .undefined
-        case AidlabSDK.front:
+        case AidlabSDK.prone:
             self = .prone
-        case AidlabSDK.back:
+        case AidlabSDK.supine:
             self = .supine
         case AidlabSDK.leftSide:
             self = .leftSide
