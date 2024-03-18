@@ -25,7 +25,6 @@ extension Device: CBPeripheralDelegate {
 
         if service.uuid == userServiceUUID {
             for characteristic in serviceCharacteristics where characteristic.uuid == cmdCharacteristicUUID {
-                self.cmdCharacteristic = characteristic
                 peripheral.setNotifyValue(true, for: characteristic)
             }
 
@@ -33,10 +32,6 @@ extension Device: CBPeripheralDelegate {
             /// We assume that all of characteristics are readable
             for characteristic in serviceCharacteristics {
                 peripheral.readValue(for: characteristic)
-            }
-        } else if service.uuid == CurrentTimeService.uuid {
-            for characteristic in serviceCharacteristics {
-                _setTime(characteristic, currentTime: UInt32(Date().timeIntervalSince1970))
             }
         }
     }

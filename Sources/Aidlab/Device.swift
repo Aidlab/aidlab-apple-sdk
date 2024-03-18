@@ -37,41 +37,6 @@ public class Device: NSObject {
         AidlabManager.centralManager?.cancelPeripheralConnection(peripheral)
     }
 
-    public func readRSSI() {
-        peripheral.readRSSI()
-    }
-
-    public func startSynchronization() {
-        send("sync start")
-    }
-
-    public func stopSynchronization() {
-        send("sync stop")
-    }
-
-    public func setECGFiltrationMethod(_ ecgFiltrationMethod: ECGFiltrationMethod) {
-        guard let aidlabSDK else { return }
-
-        switch ecgFiltrationMethod {
-        case .normal:
-            AidlabSDK_set_aggressive_ecg_filtration(false, aidlabSDK)
-        case .aggressive:
-            AidlabSDK_set_aggressive_ecg_filtration(true, aidlabSDK)
-        }
-    }
-
-    public func send(_ message: String) {
-        guard let aidlabSDK else { return }
-
-        let cStringMessage = strdup(message)
-        let command: UnsafeMutablePointer<UInt8> = AidlabSDK_get_command(cStringMessage, aidlabSDK)
-        free(cStringMessage)
-
-        let size = command[3] | (command[4] << 8)
-
-        _ = sendCommand(Array(UnsafeMutableBufferPointer(start: command, count: Int(size))))
-    }
-
     public func collect(dataTypes: [DataType], dataTypesToStore: [DataType]) {
         guard let aidlabSDK else {
             deviceDelegate?.didReceiveError(self, error: AidlabError(message: "API misuse: Attempt to use the API without an established connection. Please ensure the device is connected using the connect() method before invoking this API."))
@@ -111,7 +76,52 @@ public class Device: NSObject {
         }
     }
 
-    // -- internal -------------------------------------------------------------
+    public func readRSSI() {
+        peripheral.readRSSI()
+    }
+
+    public func startSynchronization() {
+        send("sync start")
+    }
+
+    public func stopSynchronization() {
+        send("sync stop")
+    }
+
+    public func setTime(_ timestamp: UInt32) {
+        guard let currentTimeCharacteristic = discoveredCharacteristics.first(where: { $0.uuid == cmdCharacteristicUUID })
+        else {
+            deviceDelegate?.didReceiveError(self, error: AidlabError(message: "Current time characteristic unavailable"))
+            return
+        }
+
+        peripheral.writeValue(withUnsafeBytes(of: timestamp) { Data($0) }, for: currentTimeCharacteristic, type: .withoutResponse)
+    }
+
+    public func setECGFiltrationMethod(_ ecgFiltrationMethod: ECGFiltrationMethod) {
+        guard let aidlabSDK else { return }
+
+        switch ecgFiltrationMethod {
+        case .normal:
+            AidlabSDK_set_aggressive_ecg_filtration(false, aidlabSDK)
+        case .aggressive:
+            AidlabSDK_set_aggressive_ecg_filtration(true, aidlabSDK)
+        }
+    }
+
+    public func send(_ message: String) {
+        guard let aidlabSDK else { return }
+
+        let cStringMessage = strdup(message)
+        let command: UnsafeMutablePointer<UInt8> = AidlabSDK_get_command(cStringMessage, aidlabSDK)
+        free(cStringMessage)
+
+        let size = command[3] | (command[4] << 8)
+
+        _ = sendCommand(Array(UnsafeMutableBufferPointer(start: command, count: Int(size))))
+    }
+
+    // -- Internal -------------------------------------------------------------
 
     /// Array with CBUUID services for start notify
     let notifyServices: [CBUUID] = [userServiceUUID, MotionService.uuid, HeartRateService.uuid, HealthThermometerService.uuid, BatteryLevelService.uuid]
@@ -119,13 +129,12 @@ public class Device: NSObject {
     /// Array with CBUUID services for read or write value
     let readWriteServices: [CBUUID] = [DeviceInformationService.uuid, CurrentTimeService.uuid]
 
-    var discoveredCharacteristics: [CBCharacteristic] = []
-
     var aidlabSDK: UnsafeMutableRawPointer!
     var deviceDelegate: DeviceDelegate?
-    internal(set) var bytes: Int = 0
-    var cmdCharacteristic: CBCharacteristic?
-    var heartRatePackageCharacteristic: CBCharacteristic?
+    var bytes: Int = 0
+
+    var discoveredCharacteristics: [CBCharacteristic] = []
+
     var maxCmdPackageLength: Int = 20
 
     /// Serial number, firmware, and hardware version are ready
@@ -137,6 +146,8 @@ public class Device: NSObject {
         }
 
         createAidlabSDK()
+
+        setTime(UInt32(Date().timeIntervalSince1970))
 
         /// Users are notified about the connection after reading the firmware revision
         deviceDelegate?.didConnect(self)
@@ -152,19 +163,16 @@ public class Device: NSObject {
 
         var fwVersion: [UInt8] = Array(firmwareRevision.utf8)
         AidlabSDK_set_firmware_revision(&fwVersion, Int32(fwVersion.count), aidlabSDK)
-        if firmwareRevision.compare("3.6.62") != .orderedAscending {
-            if let heartRatePackageCharacteristic {
-                peripheral.setNotifyValue(false, for: heartRatePackageCharacteristic)
-            }
-        }
 
         var hwVersion: [UInt8] = Array(hardwareRevision.utf8)
         AidlabSDK_set_hardware_revision(&hwVersion, Int32(hwVersion.count), aidlabSDK)
 
         let context = Unmanaged.passUnretained(self).toOpaque()
         AidlabSDK_set_context(context, aidlabSDK)
+
         maxCmdPackageLength = 20
         AidlabSDK_set_mtu(UInt32(maxCmdPackageLength), aidlabSDK)
+
         AidlabSDK_init_callbacks(didReceiveECG,
                                  didReceiveRespiration,
                                  didReceiveSkinTemperature,
@@ -202,14 +210,10 @@ public class Device: NSObject {
         return Config.supportedAidlabVersion >= minor ? true : false
     }
 
-    func _setTime(_ characteristic: CBCharacteristic, currentTime: UInt32) {
-        peripheral.writeValue(withUnsafeBytes(of: currentTime) { Data($0) }, for: characteristic, type: .withoutResponse)
-    }
-
     // -- Private --------------------------------------------------------------
 
     private func sendCommand(_ command: [UInt8]) -> Bool {
-        guard let cmdCharacteristic
+        guard let cmdCharacteristic = discoveredCharacteristics.first(where: { $0.uuid == cmdCharacteristicUUID })
         else {
             deviceDelegate?.didReceiveError(self, error: AidlabError(message: "Command characteristic unavailable"))
             return false
