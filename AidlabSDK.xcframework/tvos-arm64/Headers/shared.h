@@ -1,6 +1,6 @@
 //
 //  Created by Szymon Gesicki on 29.02.2020.
-//  Copyright © 2017-2023 Aidlab. All rights reserved.
+//  Copyright © 2017-2024 Aidlab. All rights reserved.
 //
 
 #ifndef SHARED_H__
@@ -77,7 +77,6 @@ typedef enum {
 
 typedef enum { undefined = 0, prone = 1, supine = 2, leftSide = 3, rightSide = 4 } BodyPosition;
 
-typedef void (*callbackReceivedCommand)(void*);
 typedef void (*callbackSampleTime)(void*, uint64_t, float);
 typedef void (*callbackActivity)(void*, uint64_t, ActivityType);
 typedef void (*callbackRespirationRate)(void*, uint64_t, uint32_t);
@@ -99,10 +98,11 @@ typedef void (*callbackSignalQuality)(void*, uint64_t, uint8_t);
 typedef void (*callbackUnsynchronizedSize)(void*, uint32_t, float);
 typedef void (*callbackSyncState)(void*, SyncState);
 typedef void (*callbackSignalQuality)(void*, uint64_t, uint8_t);
-typedef void (*callbackMessage)(void*, const char* process, const char* message);
 typedef void (*callbackUserEvent)(void*, uint64_t);
-typedef void (*callbackError)(void*, const char* text);
 typedef void (*callback_function)(void*, Exercise);
+typedef void (*callbackReceivedCommand)(void*);
+typedef void (*callbackMessage)(void*, const char* process, const char* message);
+typedef void (*callbackError)(void*, const char* text);
 
 SHARED_EXPORT void* AidlabSDK_create();
 
