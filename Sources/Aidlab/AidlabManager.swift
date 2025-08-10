@@ -24,22 +24,19 @@ public enum ScanMode: Int {
     case aggressive = 1
 }
 
-public class AidlabManager: NSObject, CBCentralManagerDelegate {
+@MainActor
+public final class AidlabManager: NSObject, @preconcurrency CBCentralManagerDelegate {
     public var legacyAutoPair: Bool = true
 
     public init(delegate: AidlabManagerDelegate) {
         self.delegate = delegate
-
         shouldScan = false
-
         super.init()
     }
 
     public func scan(scanMode: ScanMode = .lowPower) {
         self.scanMode = scanMode
 
-        /// CBCentralManager call's for Bluetooth permision
-        /// that's why we initialize it here.
         if AidlabManager.centralManager == nil {
             AidlabManager.centralManager = CBCentralManager(delegate: self, queue: nil, options: nil)
         } else {
@@ -49,12 +46,11 @@ public class AidlabManager: NSObject, CBCentralManagerDelegate {
         shouldScan = true
 
         guard let centralManager = AidlabManager.centralManager else { return }
-
         if !isPowerOn(central: centralManager) { return }
 
         centralManager.stopScan()
-
-        centralManager.scanForPeripherals(withServices: legacyAutoPair ? servicesToScan : nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: scanMode == .aggressive ? true : false])
+        centralManager.scanForPeripherals(withServices: legacyAutoPair ? servicesToScan : nil,
+                                          options: [CBCentralManagerScanOptionAllowDuplicatesKey: scanMode == .aggressive])
     }
 
     public func stopScan() {
@@ -64,8 +60,7 @@ public class AidlabManager: NSObject, CBCentralManagerDelegate {
 
     public func centralManagerDidUpdateState(_ central: CBCentralManager) {
         if central.state == .poweredOff {
-            /// Nothing to do
-
+            // Nothing to do
         } else if shouldScan {
             scan(scanMode: scanMode)
         }
@@ -95,14 +90,7 @@ public class AidlabManager: NSObject, CBCentralManagerDelegate {
 
     // -- Internal -------------------------------------------------------------
 
-    /// centralManager is static now, as nilling this property was leading to `[CoreBluetooth] XPC
-    /// connection invalid` and crash when device was trying to connect with
-    /// peripheral. Different approaches was examined:
-    /// * cleaning centralManager after X seconds
-    /// * stopping the scan
-    /// * waiting for power off (centralManagerDidUpdateState)
-    /// yet nothing helped. Apple's docs and Google don't state if CBCentralManager can be nilled or not.
-    static var centralManager: CBCentralManager?
+    nonisolated(unsafe) static var centralManager: CBCentralManager?
 
     // -- Private --------------------------------------------------------------
 
@@ -117,10 +105,7 @@ public class AidlabManager: NSObject, CBCentralManagerDelegate {
     }
 
     private var shouldScan: Bool
-
     private var delegate: AidlabManagerDelegate?
-
     private var scanMode: ScanMode = .lowPower
-
     private let servicesToScan: [CBUUID] = [HeartRateService.uuid]
 }

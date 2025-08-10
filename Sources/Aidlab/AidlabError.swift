@@ -5,10 +5,13 @@
 
 import Foundation
 
-class AidlabError: NSObject, LocalizedError {
-    var message = ""
+final class AidlabError: NSObject, LocalizedError, @unchecked Sendable {
+    let message: String
 
-    init(message: String) { self.message = message }
+    init(message: String) {
+        self.message = message
+        super.init()
+    }
 
     override var description: String {
         "AidlabError: \(message)"

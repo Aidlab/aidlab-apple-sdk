@@ -5,7 +5,7 @@
 
 import Foundation
 
-public enum DataType: Int {
+public enum DataType: Int, Sendable {
     case ecg = 0
     case respiration = 1
     case skinTemperature = 2

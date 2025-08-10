@@ -7,6 +7,7 @@ import AidlabSDK
 import CoreBluetooth
 import Foundation
 
+@MainActor
 public class Device: NSObject {
     public var name: String?
     public var firmwareRevision: String?
