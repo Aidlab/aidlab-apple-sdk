@@ -1,7 +1,6 @@
-import class Foundation.ProcessInfo
-
-// swift-tools-version: 5.9
+// swift-tools-version: 6.1
 import PackageDescription
+import class Foundation.ProcessInfo
 
 let package = Package(
     name: "Aidlab",
