@@ -1,0 +1,25 @@
+# SwiftLint configuration for Aidlab Apple SDK
+# Focus on catching unsafe constructs
+
+included:
+  - .
+
+opt_in_rules:
+  - force_unwrapping
+  - force_cast
+  - force_try
+  - implicitly_unwrapped_optional
+  - discouraged_optional_collection
+
+disabled_rules:
+  - line_length
+  - identifier_name
+  - function_parameter_count
+  - type_body_length
+  - cyclomatic_complexity
+  - function_body_length
+  - file_length
+
+identifier_name:
+  min_length: 2
+  excluded: [id, i, j, x, y]

@@ -129,7 +129,8 @@ public class Device: NSObject {
     /// Array with CBUUID services for read or write value
     let readWriteServices: [CBUUID] = [DeviceInformationService.uuid, CurrentTimeService.uuid]
 
-    var aidlabSDK: UnsafeMutableRawPointer!
+    // Avoid implicitly unwrapped optional; use optional and guard when needed
+    var aidlabSDK: UnsafeMutableRawPointer?
     var deviceDelegate: DeviceDelegate?
     var bytes: Int = 0
 
@@ -162,45 +163,69 @@ public class Device: NSObject {
         }
 
         var fwVersion: [UInt8] = Array(firmwareRevision.utf8)
-        AidlabSDK_set_firmware_revision(&fwVersion, Int32(fwVersion.count), aidlabSDK)
+        if let aidlabSDK {
+            AidlabSDK_set_firmware_revision(&fwVersion, Int32(fwVersion.count), aidlabSDK)
+        } else {
+            deviceDelegate?.didReceiveError(self, error: AidlabError(message: "Internal error"))
+            return
+        }
 
         var hwVersion: [UInt8] = Array(hardwareRevision.utf8)
-        AidlabSDK_set_hardware_revision(&hwVersion, Int32(hwVersion.count), aidlabSDK)
+        if let aidlabSDK {
+            AidlabSDK_set_hardware_revision(&hwVersion, Int32(hwVersion.count), aidlabSDK)
+        } else {
+            deviceDelegate?.didReceiveError(self, error: AidlabError(message: "Internal error"))
+            return
+        }
 
-        let context = Unmanaged.passUnretained(self).toOpaque()
-        AidlabSDK_set_context(context, aidlabSDK)
+        if let aidlabSDK {
+            let context = Unmanaged.passUnretained(self).toOpaque()
+            AidlabSDK_set_context(context, aidlabSDK)
+        } else {
+            deviceDelegate?.didReceiveError(self, error: AidlabError(message: "Internal error"))
+            return
+        }
 
         maxCmdPackageLength = 20
-        AidlabSDK_set_mtu(UInt32(maxCmdPackageLength), aidlabSDK)
+        if let aidlabSDK {
+            AidlabSDK_set_mtu(UInt32(maxCmdPackageLength), aidlabSDK)
+        }
 
-        AidlabSDK_init_callbacks(didReceiveECG,
-                                 didReceiveRespiration,
-                                 didReceiveSkinTemperature,
-                                 didReceiveAccelerometer,
-                                 didReceiveGyroscope,
-                                 didReceiveMagnetometer,
-                                 didReceiveBatteryLevel,
-                                 didDetectActivity,
-                                 didReceiveSteps,
-                                 didReceiveOrientation,
-                                 didReceiveQuaternion,
-                                 didReceiveRespirationRate,
-                                 wearStateDidChange,
-                                 didReceiveHeartRate,
-                                 didReceiveRr,
-                                 didReceiveSoundVolume,
-                                 didDetect,
-                                 didReceiveCommand,
-                                 didReceiveMessage,
-                                 didDetectUserEvent,
-                                 didReceivePressure,
-                                 pressureWearStateDidChange,
-                                 didReceiveBodyPosition,
-                                 didReceiveError,
-                                 didReceiveSignalQuality,
-                                 aidlabSDK)
+        if let aidlabSDK {
+            AidlabSDK_init_callbacks(didReceiveECG,
+                                     didReceiveRespiration,
+                                     didReceiveSkinTemperature,
+                                     didReceiveAccelerometer,
+                                     didReceiveGyroscope,
+                                     didReceiveMagnetometer,
+                                     didReceiveBatteryLevel,
+                                     didDetectActivity,
+                                     didReceiveSteps,
+                                     didReceiveOrientation,
+                                     didReceiveQuaternion,
+                                     didReceiveRespirationRate,
+                                     wearStateDidChange,
+                                     didReceiveHeartRate,
+                                     didReceiveRr,
+                                     didReceiveSoundVolume,
+                                     didDetect,
+                                     didReceiveCommand,
+                                     didReceiveMessage,
+                                     didDetectUserEvent,
+                                     didReceivePressure,
+                                     pressureWearStateDidChange,
+                                     didReceiveBodyPosition,
+                                     didReceiveError,
+                                     didReceiveSignalQuality,
+                                     aidlabSDK)
+        } else {
+            deviceDelegate?.didReceiveError(self, error: AidlabError(message: "Internal error"))
+            return
+        }
 
-        AidlabSDK_init_synchronization_callbacks(syncStateDidChange, didReceiveUnsynchronizedSize, didReceivePastECG, didReceivePastRespiration, didReceivePastSkinTemperature, didReceivePastHeartRate, didReceivePastRr, didReceivePastActivity, didReceivePastRespirationRate, didReceivePastSteps, didDetectPastUserEvent, didReceivePastSoundVolume, didReceivePastPressure, didReceivePastAccelerometer, didReceivePastGyroscope, didReceivePastQuaternion, didReceivePastOrientation, didReceivePastMagnetometer, didReceivePastBodyPosition, didReceivePastRr, didReceivePastSignalQuality, aidlabSDK)
+        if let aidlabSDK {
+            AidlabSDK_init_synchronization_callbacks(syncStateDidChange, didReceiveUnsynchronizedSize, didReceivePastECG, didReceivePastRespiration, didReceivePastSkinTemperature, didReceivePastHeartRate, didReceivePastRr, didReceivePastActivity, didReceivePastRespirationRate, didReceivePastSteps, didDetectPastUserEvent, didReceivePastSoundVolume, didReceivePastPressure, didReceivePastAccelerometer, didReceivePastGyroscope, didReceivePastQuaternion, didReceivePastOrientation, didReceivePastMagnetometer, didReceivePastBodyPosition, didReceivePastRr, didReceivePastSignalQuality, aidlabSDK)
+        }
     }
 
     func checkCompatibility() -> Bool {

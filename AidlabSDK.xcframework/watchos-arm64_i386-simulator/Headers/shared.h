@@ -2,6 +2,11 @@
 //  Created by Szymon Gesicki on 29.02.2020.
 //  Copyright © 2017-2024 Aidlab. All rights reserved.
 //
+//  Aidlab C++ SDK facilitates the process of exchanging information and receiving events from Aidlab and Aidmed One.
+//  The SDK offers packet compression mechanisms, backward compatibility, filtration, and simple data analysis.
+//
+//  Note: Aidlab C++ SDK **does not** handle Bluetooth communication.
+//
 
 #ifndef SHARED_H__
 #define SHARED_H__
@@ -100,14 +105,31 @@ typedef void (*callbackSyncState)(void*, SyncState);
 typedef void (*callbackSignalQuality)(void*, uint64_t, uint8_t);
 typedef void (*callbackUserEvent)(void*, uint64_t);
 typedef void (*callback_function)(void*, Exercise);
+
+/// @brief This callback can be safely ignored and will be removed in the next version.
 typedef void (*callbackReceivedCommand)(void*);
+
+/// @brief Callback function type for receiving messages from the device.
+/// The result of this callback can be used to display messages from the device.
+/// The message (message) can be converted to UTF-8.
+/// Process is a numeric auxiliary value indicating from which device process the message originated.
 typedef void (*callbackMessage)(void*, const char* process, const char* message);
+
+/// @brief Callback function type for receiving errors from the device or Aidlab SDK.
 typedef void (*callbackError)(void*, const char* text);
 
+/// Creates a new instance of Aidlab SDK.
+/// Each device should have a unique instance of AidlabSDK.
+/// This should be created upon successful connection to the device and discovery of all device's Bluetooth services.
+///
+/// @return Pointer to the Aidlab SDK instance.
 SHARED_EXPORT void* AidlabSDK_create();
 
+/// Destroys the Aidlab SDK instance.
+/// Should be called after disconnecting from the device.
 SHARED_EXPORT void AidlabSDK_destroy(void* aidlabSDK);
 
+/// Initializes the callbacks.
 SHARED_EXPORT void AidlabSDK_init_callbacks(
     callbackSampleTime ecg, callbackSampleTime respiration, callbackSampleTime temperature,
     callbackAccelerometer accelerometer, callbackGyroscope gyroscope, callbackMagnetometer magnetometer,
@@ -118,6 +140,7 @@ SHARED_EXPORT void AidlabSDK_init_callbacks(
     callbackPressure pressure, callbackWearState pressureWearState, callbackBodyPosition bodyPosition,
     callbackError callbackError, callbackSignalQuality signalQuality, void* aidlabSDK);
 
+/// Initializes synchronization callbacks for historical data.
 SHARED_EXPORT void AidlabSDK_init_synchronization_callbacks(
     callbackSyncState syncState, callbackUnsynchronizedSize unsynchronizedSize, callbackSampleTime pastEcg,
     callbackSampleTime pastRespiration, callbackSampleTime pastTemperature, callbackHeartRate pastHeartRate,
@@ -127,21 +150,94 @@ SHARED_EXPORT void AidlabSDK_init_synchronization_callbacks(
     callbackOrientation orientation, callbackMagnetometer magnetometer, callbackBodyPosition bodyPosition,
     callbackRr rr, callbackSignalQuality signalQuality, void* aidlabSDK);
 
+/// Processes a command received from the device.
+/// @param data Pointer to the command data buffer received from the Bluetooth COMMAND_CHARACTERISTIC.
+/// @param size Size of the data buffer.
+/// @param aidlabSDK Pointer to the Aidlab SDK instance.
 SHARED_EXPORT void AidlabSDK_process_command(const uint8_t* data, int size, void* aidlabSDK);
-SHARED_EXPORT void AidlabSDK_process_battery_package(const uint8_t* data, int size, void* aidlabSDK);
 
+/// Creates a command to be sent to the device.
+/// @param message Pointer to the command string.
+/// @param aidlabSDK Pointer to the Aidlab SDK instance.
+/// @return Pointer to the created command buffer. You should not free this buffer.
 SHARED_EXPORT uint8_t* AidlabSDK_get_command(char* message, void* aidlabSDK);
+
+/// Creates a command to collect data from the device.
+/// @param realSignals Pointer to the array of real-time data signals.
+/// @param realSize Size of the real-time data signals array.
+/// @param syncSignals Pointer to the array of synchronized data signals.
+/// @param syncSize Size of the synchronized data signals array.
+/// @param aidlabSDK Pointer to the Aidlab SDK instance.
+/// @return Pointer to the created collect command buffer. Send this buffer to `COMMAND_CHARACTERISTIC`.
+///         Do not free this buffer as it is managed internally by the SDK.
+///
+/// After receiving the collect command buffer, extract the size of the command:
+/// - The size is stored in the 3rd and 4th bytes of the buffer.
+/// - Use the following code to retrieve the size:
+///   ```c
+///   int size = write_value[3] | (write_value[4] << 8);
+///   ```
+///
+/// Send the extracted command buffer to the device:
+/// - Prepare a message array using the size:
+///   ```c
+///   uint8_t message[size];
+///   for (int i = 0; i < size; i++) {
+///       message[i] = write_value[i];
+///   }
+///   ```
+/// - Send the message array to the `COMMAND_CHARACTERISTIC` using your Bluetooth API.
 SHARED_EXPORT uint8_t* AidlabSDK_get_collect_command(const uint8_t* realSignals, int realSize,
                                                      const uint8_t* syncSignals, int syncSize, void* aidlabSDK);
 
+/// @brief Sets the context for callback identification.
+/// This function allows you to attach any custom object to the Aidlab SDK instance.
+/// The provided context will be passed to all callbacks, enabling you to identify
+/// which device or instance sent the callback.
+///
+/// @param context Pointer to the custom context object.
+/// @param aidlabSDK Pointer to the Aidlab SDK instance.
 SHARED_EXPORT void AidlabSDK_set_context(void* context, void* aidlabSDK);
+
+/// @brief Sets the Maximum Transmission Unit (MTU) for the connection.
+///
+/// @param mtu MTU size.
+/// @param aidlabSDK Pointer to the Aidlab SDK instance.
 SHARED_EXPORT void AidlabSDK_set_mtu(uint32_t mtu, void* aidlabSDK);
+
+/// @brief Sets the hardware revision string.
+/// This function is required and should be called immediately after `AidlabSDK_create`.
+///
+/// @param hwRevision Pointer to the hardware revision string.
+/// @param size Size of the hardware revision string.
+/// @param aidlabSDK Pointer to the Aidlab SDK instance.
 SHARED_EXPORT void AidlabSDK_set_hardware_revision(uint8_t* hwRevision, int size, void* aidlabSDK);
+
+/// @brief Sets the firmware revision string.
+/// This function is required and should be called immediately after `AidlabSDK_create`.
+///
+/// @param fwRevision Pointer to the firmware revision string.
+/// @param size Size of the firmware revision string.
+/// @param aidlabSDK Pointer to the Aidlab SDK instance.
 SHARED_EXPORT void AidlabSDK_set_firmware_revision(uint8_t* fwRevision, int size, void* aidlabSDK);
 
+/// @brief Sets the aggressive ECG filtration.
+///
+/// @param value Boolean value to enable/disable aggressive filtration.
+/// @param aidlabSDK Pointer to the Aidlab SDK instance.
 SHARED_EXPORT void AidlabSDK_set_aggressive_ecg_filtration(bool value, void* aidlabSDK);
 
-/// Legacy (<FW 3.6 methods)
+////////////////////////////////
+/// Legacy (<FW 3.6 methods) ///
+////////////////////////////////
+
+/// @deprecated Use standard Bluetooth Battery Service to read battery level.
+/// Processes a battery package received from the device.
+/// @param data Pointer to the battery data buffer.
+/// @param size Size of the data buffer.
+/// @param aidlabSDK Pointer to the Aidlab SDK instance.
+SHARED_EXPORT void AidlabSDK_process_battery_package(const uint8_t* data, int size, void* aidlabSDK);
+
 SHARED_EXPORT void processECGPackage(const uint8_t* data, int size, void* aidlabSDK);
 SHARED_EXPORT void processTemperaturePackage(const uint8_t* data, int size, void* aidlabSDK);
 SHARED_EXPORT void processActivityPackage(const uint8_t* data, int size, void* aidlabSDK);
