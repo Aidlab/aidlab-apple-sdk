@@ -22,4 +22,6 @@ public enum DataType: Int, Sendable {
     case soundFeatures = 13
     case respirationRate = 14
     case bodyPosition = 15
+    case eda = 16
+    case gps = 17
 }

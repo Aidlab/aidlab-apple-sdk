@@ -6,6 +6,7 @@
 import AidlabSDK
 import Foundation
 
+/// Callbacks may arrive on a background thread. Dispatch to the appropriate queue if needed.
 public protocol DeviceDelegate: AnyObject {
     func didReceiveECG(_ device: Device, timestamp: UInt64, value: Float)
 
@@ -26,6 +27,10 @@ public protocol DeviceDelegate: AnyObject {
     func didReceiveQuaternion(_ device: Device, timestamp: UInt64, qw: Float, qx: Float, qy: Float, qz: Float)
 
     func didReceiveOrientation(_ device: Device, timestamp: UInt64, roll: Float, pitch: Float, yaw: Float)
+
+    func didReceiveEDA(_ device: Device, timestamp: UInt64, conductance: Float)
+
+    func didReceiveGPS(_ device: Device, timestamp: UInt64, latitude: Double, longitude: Double, altitude: Double, speed: Float, heading: Float, hdop: Float)
 
     func didReceiveBodyPosition(_ device: Device, timestamp: UInt64, bodyPosition: BodyPosition)
 
@@ -56,13 +61,16 @@ public protocol DeviceDelegate: AnyObject {
      */
     func wearStateDidChange(_ device: Device, state: WearState)
 
-    func didReceiveCommand(_ device: Device)
-
-    func didReceiveMessage(_ device: Device, process: String, message: String)
+    /// Called when a payload was received from a process (raw bytes).
+    /// - Parameters:
+    ///   - device: The Aidlab device instance
+    ///   - process: The process name that sent the payload (e.g., "ping", "sync", "system")
+    ///   - payload: Raw payload data as Data
+    func didReceivePayload(_ device: Device, process: String, payload: Data)
 
     func didDetectUserEvent(_ device: Device, timestamp: UInt64)
 
-    func didReceiveSignalQuality(_ timestamp: UInt64, value: Int32)
+    func didReceiveSignalQuality(_ device: Device, timestamp: UInt64, value: Int32)
 
     func syncStateDidChange(_ device: Device, state: SyncState)
 
@@ -96,6 +104,10 @@ public protocol DeviceDelegate: AnyObject {
     func didReceivePastQuaternion(_ device: Device, timestamp: UInt64, qw: Float, qx: Float, qy: Float, qz: Float)
 
     func didReceivePastOrientation(_ device: Device, timestamp: UInt64, roll: Float, pitch: Float, yaw: Float)
+
+    func didReceivePastEDA(_ device: Device, timestamp: UInt64, conductance: Float)
+
+    func didReceivePastGPS(_ device: Device, timestamp: UInt64, latitude: Double, longitude: Double, altitude: Double, speed: Float, heading: Float, hdop: Float)
 
     func didReceivePastBodyPosition(_ device: Device, timestamp: UInt64, bodyPosition: BodyPosition)
 

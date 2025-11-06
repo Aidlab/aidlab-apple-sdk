@@ -5,7 +5,7 @@
 
 import Foundation
 
-final class AidlabError: NSObject, LocalizedError, @unchecked Sendable {
+final class AidlabError: NSObject, LocalizedError {
     let message: String
 
     init(message: String) {

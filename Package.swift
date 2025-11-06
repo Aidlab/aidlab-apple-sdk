@@ -26,6 +26,7 @@ let package = Package(
             dependencies: ["AidlabSDK"],
             linkerSettings: [
                 .linkedLibrary("c++"),
+                .linkedLibrary("z"),
             ]
         ),
     ]

@@ -24,7 +24,6 @@ public enum ScanMode: Int {
     case aggressive = 1
 }
 
-@MainActor
 public final class AidlabManager: NSObject, @preconcurrency CBCentralManagerDelegate {
     public var legacyAutoPair: Bool = true
 
@@ -75,7 +74,7 @@ public final class AidlabManager: NSObject, @preconcurrency CBCentralManagerDele
     }
 
     public func centralManager(_: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
-        discoveredDevices[peripheral.identifier]?.onDisconnectPeripheral(error: error)
+        discoveredDevices[peripheral.identifier]?.onDisconnectPeripheral(timestamp: nil, isReconnecting: nil, error: error)
     }
 
     public func centralManager(_: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, timestamp: CFAbsoluteTime, isReconnecting: Bool, error: Error?) {

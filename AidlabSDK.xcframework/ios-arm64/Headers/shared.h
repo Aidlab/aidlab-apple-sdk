@@ -13,6 +13,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -70,15 +71,7 @@ typedef enum {
 
 } SyncState;
 
-typedef enum {
-    oldFirmware = 0,
-    crcError = 1,
-    stopped = 2,
-    fail = 3,
-    unknownResponse = 4,
-    downloadFail = 5,
-    invalidSize = 6,
-} UpdateError;
+typedef enum { LogLevel_DEBUG = 0, LogLevel_INFO = 1, LogLevel_WARN = 2, LogLevel_ERROR = 3 } LogLevel;
 
 typedef enum { undefined = 0, prone = 1, supine = 2, leftSide = 3, rightSide = 4 } BodyPosition;
 
@@ -100,23 +93,59 @@ typedef void (*callbackSoundVolume)(void*, uint64_t, uint16_t);
 typedef void (*callbackPressure)(void*, uint64_t, int);
 typedef void (*callbackSoundFeatures)(void*, uint64_t, float*, int);
 typedef void (*callbackSignalQuality)(void*, uint64_t, uint8_t);
+typedef void (*callbackEda)(void*, uint64_t, float);  // timestamp, conductance (µS)
+typedef void (*callbackGps)(void*, uint64_t, float, float, float, float, float, float);  // timestamp, lat, lon, alt, speed, heading, hdop
 typedef void (*callbackUnsynchronizedSize)(void*, uint32_t, float);
 typedef void (*callbackSyncState)(void*, SyncState);
-typedef void (*callbackSignalQuality)(void*, uint64_t, uint8_t);
 typedef void (*callbackUserEvent)(void*, uint64_t);
 typedef void (*callback_function)(void*, Exercise);
 
-/// @brief This callback can be safely ignored and will be removed in the next version.
-typedef void (*callbackReceivedCommand)(void*);
+////////////////////////////////
+/// BLE Communication Callbacks ///
+////////////////////////////////
 
-/// @brief Callback function type for receiving messages from the device.
-/// The result of this callback can be used to display messages from the device.
-/// The message (message) can be converted to UTF-8.
-/// Process is a numeric auxiliary value indicating from which device process the message originated.
-typedef void (*callbackMessage)(void*, const char* process, const char* message);
+/// @brief Callback function type for sending complete payloads to the device.
+/// SDK returns full payloads with protocol headers - platform must chunk to MTU size.
+/// Implementation should split payload into MTU-sized chunks and write to BLE command characteristic.
+typedef void (*callbackBLESend)(void* context, const uint8_t* data, int size);
 
-/// @brief Callback function type for receiving errors from the device or Aidlab SDK.
-typedef void (*callbackError)(void*, const char* text);
+/// @brief Callback invoked when BLE transport is ready to accept the next payload.
+/// Legacy protocols (V1–V3.1) trigger it immediately after framing, V4 triggers it after ACK (when enabled).
+typedef void (*callbackBLEReady)(void* context);
+
+/// @brief Callback function type for receiving payloads from the device.
+/// This callback delivers the raw payload data after transport protocol headers are stripped.
+/// Process parameter indicates which device process originated the payload.
+typedef void (*callbackPayload)(void* context, const char* process, const uint8_t* payload, size_t payload_length);
+
+/// @brief Callback function type for receiving log messages from the Aidlab SDK.
+/// This callback provides structured logging with proper level classification.
+typedef void (*callbackLogMessage)(void* context, LogLevel level, const char* message);
+
+/// @brief Initializes BLE communication callback for sending data to device.
+/// SDK returns complete payloads ready for transmission - platform is responsible for MTU chunking.
+///
+/// @param bleSend Callback function for sending complete payloads to device
+/// @param aidlabSDK Pointer to the Aidlab SDK instance
+/// @note Platform must handle MTU-based chunking of returned payloads
+/// @note BLE errors are reported through the unified callbackLogMessage system
+SHARED_EXPORT void AidlabSDK_set_ble_send_callback(callbackBLESend bleSend, void* aidlabSDK);
+
+/// @brief Registers BLE ready callback that notifies when it is safe to transmit the next payload.
+///
+/// @param bleReady Callback to invoke on ready state
+/// @param aidlabSDK Pointer to the Aidlab SDK instance
+SHARED_EXPORT void AidlabSDK_set_ble_ready_callback(callbackBLEReady bleReady, void* aidlabSDK);
+
+/// @brief Automatically detects protocol version and processes chunk accordingly:
+/// - V1: Direct sensor data processing (no headers)
+/// - V2/V3: Legacy header parsing and packet assembly
+/// - V4: Modern protocol with compression and CRC validation
+///
+/// @param data Pointer to the received BLE chunk data
+/// @param size Size of the received chunk in bytes
+/// @param aidlabSDK Pointer to the Aidlab SDK instance
+SHARED_EXPORT void AidlabSDK_process_ble_chunk(const uint8_t* data, int size, void* aidlabSDK);
 
 /// Creates a new instance of Aidlab SDK.
 /// Each device should have a unique instance of AidlabSDK.
@@ -136,9 +165,8 @@ SHARED_EXPORT void AidlabSDK_init_callbacks(
     callbackBatteryLevel battery, callbackActivity activity, callbackSteps steps, callbackOrientation orientation,
     callbackQuaternion quaternion, callbackRespirationRate respirationRate, callbackWearState wearState,
     callbackHeartRate heartRate, callbackRr rr, callbackSoundVolume soundVolume, callback_function exercise,
-    callbackReceivedCommand receivedCommand, callbackMessage receivedMessage, callbackUserEvent userEvent,
-    callbackPressure pressure, callbackWearState pressureWearState, callbackBodyPosition bodyPosition,
-    callbackError callbackError, callbackSignalQuality signalQuality, void* aidlabSDK);
+    callbackUserEvent userEvent, callbackPressure pressure, callbackWearState pressureWearState,
+    callbackBodyPosition bodyPosition, callbackSignalQuality signalQuality, void* aidlabSDK);
 
 /// Initializes synchronization callbacks for historical data.
 SHARED_EXPORT void AidlabSDK_init_synchronization_callbacks(
@@ -148,47 +176,7 @@ SHARED_EXPORT void AidlabSDK_init_synchronization_callbacks(
     callbackSteps pastSteps, callbackUserEvent userEvent, callbackSoundVolume soundVolume, callbackPressure pressure,
     callbackAccelerometer accelerometer, callbackGyroscope gyroscope, callbackQuaternion quaternion,
     callbackOrientation orientation, callbackMagnetometer magnetometer, callbackBodyPosition bodyPosition,
-    callbackRr rr, callbackSignalQuality signalQuality, void* aidlabSDK);
-
-/// Processes a command received from the device.
-/// @param data Pointer to the command data buffer received from the Bluetooth COMMAND_CHARACTERISTIC.
-/// @param size Size of the data buffer.
-/// @param aidlabSDK Pointer to the Aidlab SDK instance.
-SHARED_EXPORT void AidlabSDK_process_command(const uint8_t* data, int size, void* aidlabSDK);
-
-/// Creates a command to be sent to the device.
-/// @param message Pointer to the command string.
-/// @param aidlabSDK Pointer to the Aidlab SDK instance.
-/// @return Pointer to the created command buffer. You should not free this buffer.
-SHARED_EXPORT uint8_t* AidlabSDK_get_command(char* message, void* aidlabSDK);
-
-/// Creates a command to collect data from the device.
-/// @param realSignals Pointer to the array of real-time data signals.
-/// @param realSize Size of the real-time data signals array.
-/// @param syncSignals Pointer to the array of synchronized data signals.
-/// @param syncSize Size of the synchronized data signals array.
-/// @param aidlabSDK Pointer to the Aidlab SDK instance.
-/// @return Pointer to the created collect command buffer. Send this buffer to `COMMAND_CHARACTERISTIC`.
-///         Do not free this buffer as it is managed internally by the SDK.
-///
-/// After receiving the collect command buffer, extract the size of the command:
-/// - The size is stored in the 3rd and 4th bytes of the buffer.
-/// - Use the following code to retrieve the size:
-///   ```c
-///   int size = write_value[3] | (write_value[4] << 8);
-///   ```
-///
-/// Send the extracted command buffer to the device:
-/// - Prepare a message array using the size:
-///   ```c
-///   uint8_t message[size];
-///   for (int i = 0; i < size; i++) {
-///       message[i] = write_value[i];
-///   }
-///   ```
-/// - Send the message array to the `COMMAND_CHARACTERISTIC` using your Bluetooth API.
-SHARED_EXPORT uint8_t* AidlabSDK_get_collect_command(const uint8_t* realSignals, int realSize,
-                                                     const uint8_t* syncSignals, int syncSize, void* aidlabSDK);
+    callbackSignalQuality signalQuality, void* aidlabSDK);
 
 /// @brief Sets the context for callback identification.
 /// This function allows you to attach any custom object to the Aidlab SDK instance.
@@ -199,11 +187,17 @@ SHARED_EXPORT uint8_t* AidlabSDK_get_collect_command(const uint8_t* realSignals,
 /// @param aidlabSDK Pointer to the Aidlab SDK instance.
 SHARED_EXPORT void AidlabSDK_set_context(void* context, void* aidlabSDK);
 
-/// @brief Sets the Maximum Transmission Unit (MTU) for the connection.
+SHARED_EXPORT void AidlabSDK_set_payload_callback(callbackPayload callback, void* aidlabSDK);
+
+/// @brief Sets the structured logging callback for the Aidlab SDK.
+/// This callback receives log messages with proper level classification.
 ///
-/// @param mtu MTU size.
+/// @param callback Pointer to the log message callback function.
+/// @param context Pointer to the context object for the callback.
 /// @param aidlabSDK Pointer to the Aidlab SDK instance.
-SHARED_EXPORT void AidlabSDK_set_mtu(uint32_t mtu, void* aidlabSDK);
+SHARED_EXPORT void AidlabSDK_set_log_callback(callbackLogMessage callback, void* context, void* aidlabSDK);
+
+// AidlabSDK_set_mtu removed - MTU handling is now platform's responsibility
 
 /// @brief Sets the hardware revision string.
 /// This function is required and should be called immediately after `AidlabSDK_create`.
@@ -226,6 +220,23 @@ SHARED_EXPORT void AidlabSDK_set_firmware_revision(uint8_t* fwRevision, int size
 /// @param value Boolean value to enable/disable aggressive filtration.
 /// @param aidlabSDK Pointer to the Aidlab SDK instance.
 SHARED_EXPORT void AidlabSDK_set_aggressive_ecg_filtration(bool value, void* aidlabSDK);
+SHARED_EXPORT void AidlabSDK_set_eda_callback(callbackEda eda, void* aidlabSDK);
+SHARED_EXPORT void AidlabSDK_set_gps_callback(callbackGps gps, void* aidlabSDK);
+SHARED_EXPORT void AidlabSDK_set_past_eda_callback(callbackEda eda, void* aidlabSDK);
+SHARED_EXPORT void AidlabSDK_set_past_gps_callback(callbackGps gps, void* aidlabSDK);
+
+/// @brief Sends payload to device.
+/// SDK adds protocol headers and returns complete payload via callbackBLESend.
+/// Platform is responsible for chunking the payload to fit MTU size.
+///
+/// @param payload Pointer to the payload data to send (without protocol headers)
+/// @param size Size of the payload buffer in bytes
+/// @param process_id Process identifier for routing
+/// @param aidlabSDK Pointer to the Aidlab SDK instance
+/// @note Requires callbackBLESend to be set via AidlabSDK_set_ble_send_callback()
+/// @note Platform must chunk returned payload according to negotiated MTU
+/// @note SDK handles protocol framing - do not add headers manually
+SHARED_EXPORT void AidlabSDK_send(const uint8_t* payload, int size, int process_id, void* aidlabSDK);
 
 ////////////////////////////////
 /// Legacy (<FW 3.6 methods) ///

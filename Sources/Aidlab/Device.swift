@@ -7,7 +7,6 @@ import AidlabSDK
 import CoreBluetooth
 import Foundation
 
-@MainActor
 public class Device: NSObject {
     public var name: String?
     public var firmwareRevision: String?
@@ -35,6 +34,7 @@ public class Device: NSObject {
     }
 
     public func disconnect() {
+        resetBleQueue()
         AidlabManager.centralManager?.cancelPeripheralConnection(peripheral)
     }
 
@@ -50,13 +50,45 @@ public class Device: NSObject {
         }
 
         if firmwareSemantic >= legacySemanticVersion {
-            var realTime = dataTypes.map { UInt8($0.rawValue) }
-            var sync = dataTypesToStore.map { UInt8($0.rawValue) }
+            // Build flags from signal arrays (use bit flags)
+            var liveFlags: UInt32 = 0
+            var syncFlags: UInt32 = 0
 
-            let command: UnsafeMutablePointer<UInt8> = AidlabSDK_get_collect_command(&realTime, Int32(dataTypes.count), &sync, Int32(dataTypesToStore.count), aidlabSDK)
+            for signal in dataTypes {
+                liveFlags |= 1 << signal.rawValue
+            }
 
-            let size = command[3] | (command[4] << 8)
-            _ = sendCommand(Array(UnsafeMutableBufferPointer(start: command, count: Int(size))))
+            for signal in dataTypesToStore {
+                syncFlags |= 1 << signal.rawValue
+            }
+
+            // Check firmware version to determine collect format
+            if let firmwareVersion3780 = SemVersion("3.7.80"), firmwareSemantic >= firmwareVersion3780 {
+                // CollectSettingsString - newer firmware expects string format
+                let liveHex = String(format: "%08X", liveFlags)
+                let syncHex = String(format: "%08X", syncFlags)
+                let collectCommand = "collect flags \(liveHex) \(syncHex)"
+                send(collectCommand, processId: 0)
+            } else {
+                // Build binary command for older firmware
+                let prefix = "collect on "
+                var buffer = Array(prefix.utf8)
+
+                // Add live flags (4 bytes, big-endian)
+                buffer.append(UInt8((liveFlags >> 24) & 0xFF))
+                buffer.append(UInt8((liveFlags >> 16) & 0xFF))
+                buffer.append(UInt8((liveFlags >> 8) & 0xFF))
+                buffer.append(UInt8((liveFlags >> 0) & 0xFF))
+
+                // Add sync flags (4 bytes, big-endian)
+                buffer.append(UInt8((syncFlags >> 24) & 0xFF))
+                buffer.append(UInt8((syncFlags >> 16) & 0xFF))
+                buffer.append(UInt8((syncFlags >> 8) & 0xFF))
+                buffer.append(UInt8((syncFlags >> 0) & 0xFF))
+
+                var dataArray = buffer
+                AidlabSDK_send(&dataArray, Int32(dataArray.count), 0, aidlabSDK)
+            }
 
             if let characteristic = discoveredCharacteristics.first(where: { $0.uuid == BatteryLevelService.batteryLevelCharacteristic }) {
                 peripheral.setNotifyValue(true, for: characteristic)
@@ -90,13 +122,14 @@ public class Device: NSObject {
     }
 
     public func setTime(_ timestamp: UInt32) {
-        guard let currentTimeCharacteristic = discoveredCharacteristics.first(where: { $0.uuid == cmdCharacteristicUUID })
+        guard let currentTimeCharacteristic = discoveredCharacteristics.first(where: { $0.uuid == CurrentTimeService.currentTimeCharacteristic })
         else {
             deviceDelegate?.didReceiveError(self, error: AidlabError(message: "Current time characteristic unavailable"))
             return
         }
 
-        peripheral.writeValue(withUnsafeBytes(of: timestamp) { Data($0) }, for: currentTimeCharacteristic, type: .withoutResponse)
+        let payload = withUnsafeBytes(of: timestamp.littleEndian) { Data($0) }
+        peripheral.writeValue(payload, for: currentTimeCharacteristic, type: .withResponse)
     }
 
     public func setECGFiltrationMethod(_ ecgFiltrationMethod: ECGFiltrationMethod) {
@@ -110,16 +143,13 @@ public class Device: NSObject {
         }
     }
 
-    public func send(_ message: String) {
+    public func send(_ message: String, processId: Int = 0) {
         guard let aidlabSDK else { return }
 
-        let cStringMessage = strdup(message)
-        let command: UnsafeMutablePointer<UInt8> = AidlabSDK_get_command(cStringMessage, aidlabSDK)
-        free(cStringMessage)
+        let messageData = message.utf8.map { UInt8($0) }
+        var dataArray = messageData
 
-        let size = command[3] | (command[4] << 8)
-
-        _ = sendCommand(Array(UnsafeMutableBufferPointer(start: command, count: Int(size))))
+        AidlabSDK_send(&dataArray, Int32(dataArray.count), Int32(processId), aidlabSDK)
     }
 
     // -- Internal -------------------------------------------------------------
@@ -133,11 +163,14 @@ public class Device: NSObject {
     // Avoid implicitly unwrapped optional; use optional and guard when needed
     var aidlabSDK: UnsafeMutableRawPointer?
     var deviceDelegate: DeviceDelegate?
-    var bytes: Int = 0
 
     var discoveredCharacteristics: [CBCharacteristic] = []
 
     var maxCmdPackageLength: Int = 20
+
+    // BLE transport state (chunk queue handled on the main actor)
+    var chunkQueue: [Data] = []
+    var readyForNextChunk: Bool = true
 
     /// Serial number, firmware, and hardware version are ready
     func didConnect() {
@@ -149,6 +182,13 @@ public class Device: NSObject {
 
         createAidlabSDK()
 
+        if supportsExtendedMtu() {
+            let negotiated = peripheral.maximumWriteValueLength(for: .withResponse)
+            let attSafe = negotiated > 3 ? negotiated - 3 : negotiated
+            maxCmdPackageLength = max(20, attSafe > 0 ? attSafe : 20)
+        } else {
+            maxCmdPackageLength = 20
+        }
         setTime(UInt32(Date().timeIntervalSince1970))
 
         /// Users are notified about the connection after reading the firmware revision
@@ -157,76 +197,63 @@ public class Device: NSObject {
 
     func createAidlabSDK() {
         aidlabSDK = AidlabSDK_create()
+        resetBleQueue()
 
         guard let firmwareRevision, let hardwareRevision else {
             deviceDelegate?.didReceiveError(self, error: AidlabError(message: "Internal error"))
             return
         }
 
-        var fwVersion: [UInt8] = Array(firmwareRevision.utf8)
-        if let aidlabSDK {
-            AidlabSDK_set_firmware_revision(&fwVersion, Int32(fwVersion.count), aidlabSDK)
-        } else {
+        guard let aidlabSDK else {
             deviceDelegate?.didReceiveError(self, error: AidlabError(message: "Internal error"))
             return
         }
+
+        let context = Unmanaged.passUnretained(self).toOpaque()
+        AidlabSDK_set_context(context, aidlabSDK)
+        AidlabSDK_set_log_callback(didReceiveLogMessage, context, aidlabSDK)
+
+        var fwVersion: [UInt8] = Array(firmwareRevision.utf8)
+        AidlabSDK_set_firmware_revision(&fwVersion, Int32(fwVersion.count), aidlabSDK)
 
         var hwVersion: [UInt8] = Array(hardwareRevision.utf8)
-        if let aidlabSDK {
-            AidlabSDK_set_hardware_revision(&hwVersion, Int32(hwVersion.count), aidlabSDK)
-        } else {
-            deviceDelegate?.didReceiveError(self, error: AidlabError(message: "Internal error"))
-            return
-        }
+        AidlabSDK_set_hardware_revision(&hwVersion, Int32(hwVersion.count), aidlabSDK)
 
-        if let aidlabSDK {
-            let context = Unmanaged.passUnretained(self).toOpaque()
-            AidlabSDK_set_context(context, aidlabSDK)
-        } else {
-            deviceDelegate?.didReceiveError(self, error: AidlabError(message: "Internal error"))
-            return
-        }
+        AidlabSDK_set_ble_send_callback(bleSendCallback, aidlabSDK)
+        AidlabSDK_set_ble_ready_callback(bleReadyCallback, aidlabSDK)
 
-        maxCmdPackageLength = 20
-        if let aidlabSDK {
-            AidlabSDK_set_mtu(UInt32(maxCmdPackageLength), aidlabSDK)
-        }
+        AidlabSDK_init_callbacks(didReceiveECG,
+                                 didReceiveRespiration,
+                                 didReceiveSkinTemperature,
+                                 didReceiveAccelerometer,
+                                 didReceiveGyroscope,
+                                 didReceiveMagnetometer,
+                                 didReceiveBatteryLevel,
+                                 didDetectActivity,
+                                 didReceiveSteps,
+                                 didReceiveOrientation,
+                                 didReceiveQuaternion,
+                                 didReceiveRespirationRate,
+                                 wearStateDidChange,
+                                 didReceiveHeartRate,
+                                 didReceiveRr,
+                                 didReceiveSoundVolume,
+                                 didDetect,
+                                 didDetectUserEvent,
+                                 didReceivePressure,
+                                 pressureWearStateDidChange,
+                                 didReceiveBodyPosition,
+                                 didReceiveSignalQuality,
+                                 aidlabSDK)
 
-        if let aidlabSDK {
-            AidlabSDK_init_callbacks(didReceiveECG,
-                                     didReceiveRespiration,
-                                     didReceiveSkinTemperature,
-                                     didReceiveAccelerometer,
-                                     didReceiveGyroscope,
-                                     didReceiveMagnetometer,
-                                     didReceiveBatteryLevel,
-                                     didDetectActivity,
-                                     didReceiveSteps,
-                                     didReceiveOrientation,
-                                     didReceiveQuaternion,
-                                     didReceiveRespirationRate,
-                                     wearStateDidChange,
-                                     didReceiveHeartRate,
-                                     didReceiveRr,
-                                     didReceiveSoundVolume,
-                                     didDetect,
-                                     didReceiveCommand,
-                                     didReceiveMessage,
-                                     didDetectUserEvent,
-                                     didReceivePressure,
-                                     pressureWearStateDidChange,
-                                     didReceiveBodyPosition,
-                                     didReceiveError,
-                                     didReceiveSignalQuality,
-                                     aidlabSDK)
-        } else {
-            deviceDelegate?.didReceiveError(self, error: AidlabError(message: "Internal error"))
-            return
-        }
+        AidlabSDK_set_eda_callback(didReceiveEDA, aidlabSDK)
+        AidlabSDK_set_gps_callback(didReceiveGPS, aidlabSDK)
 
-        if let aidlabSDK {
-            AidlabSDK_init_synchronization_callbacks(syncStateDidChange, didReceiveUnsynchronizedSize, didReceivePastECG, didReceivePastRespiration, didReceivePastSkinTemperature, didReceivePastHeartRate, didReceivePastRr, didReceivePastActivity, didReceivePastRespirationRate, didReceivePastSteps, didDetectPastUserEvent, didReceivePastSoundVolume, didReceivePastPressure, didReceivePastAccelerometer, didReceivePastGyroscope, didReceivePastQuaternion, didReceivePastOrientation, didReceivePastMagnetometer, didReceivePastBodyPosition, didReceivePastRr, didReceivePastSignalQuality, aidlabSDK)
-        }
+        AidlabSDK_set_payload_callback(didReceivePayload, aidlabSDK)
+
+        AidlabSDK_init_synchronization_callbacks(syncStateDidChange, didReceiveUnsynchronizedSize, didReceivePastECG, didReceivePastRespiration, didReceivePastSkinTemperature, didReceivePastHeartRate, didReceivePastRr, didReceivePastActivity, didReceivePastRespirationRate, didReceivePastSteps, didDetectPastUserEvent, didReceivePastSoundVolume, didReceivePastPressure, didReceivePastAccelerometer, didReceivePastGyroscope, didReceivePastQuaternion, didReceivePastOrientation, didReceivePastMagnetometer, didReceivePastBodyPosition, didReceivePastSignalQuality, aidlabSDK)
+        AidlabSDK_set_past_eda_callback(didReceivePastEDA, aidlabSDK)
+        AidlabSDK_set_past_gps_callback(didReceivePastGPS, aidlabSDK)
     }
 
     func checkCompatibility() -> Bool {
@@ -238,42 +265,92 @@ public class Device: NSObject {
 
     // -- Private --------------------------------------------------------------
 
-    private func sendCommand(_ command: [UInt8]) -> Bool {
-        guard let cmdCharacteristic = discoveredCharacteristics.first(where: { $0.uuid == cmdCharacteristicUUID })
-        else {
-            deviceDelegate?.didReceiveError(self, error: AidlabError(message: "Command characteristic unavailable"))
-            return false
+    private func sendRawBleData(_ data: [UInt8]) {
+        guard !data.isEmpty else {
+            drainChunkQueue()
+            return
         }
 
-        var sendBuffer = [UInt8](repeating: 0, count: maxCmdPackageLength)
-        var bufcount = 0
-        let size = command.count
+        let chunkSize = resolvedChunkSize()
+        var offset = 0
 
-        /// Send data portion by portion (each portion == maxCmdPackageLength)
-        for i in 0 ..< size {
-            sendBuffer[i % maxCmdPackageLength] = command[i]
-            bufcount += 1
-
-            if bufcount == maxCmdPackageLength {
-                bufcount = 0
-                peripheral.writeValue(Data(sendBuffer), for: cmdCharacteristic, type: .withResponse)
-
-                sendBuffer = Array(repeating: 0, count: maxCmdPackageLength)
-            }
+        while offset < data.count {
+            let endIndex = min(offset + chunkSize, data.count)
+            let chunk = Data(data[offset ..< endIndex])
+            chunkQueue.append(chunk)
+            offset = endIndex
         }
 
-        /// Send remaining data
-        if bufcount != 0 {
-            for i in bufcount ..< maxCmdPackageLength {
-                sendBuffer[i] = 0
-            }
-            peripheral.writeValue(Data(sendBuffer), for: cmdCharacteristic, type: .withResponse)
+        drainChunkQueue()
+    }
+
+    private func resolvedChunkSize() -> Int {
+        guard supportsExtendedMtu() else {
+            return 20
         }
 
-        return true
+        let negotiated = peripheral.maximumWriteValueLength(for: .withResponse)
+        let attSafe = negotiated > 3 ? negotiated - 3 : negotiated
+        if attSafe > 0 {
+            return min(maxCmdPackageLength, max(20, attSafe))
+        }
+        return 20
+    }
+
+    func resetBleQueue() {
+        chunkQueue.removeAll(keepingCapacity: false)
+        readyForNextChunk = true
+    }
+
+    private func supportsExtendedMtu() -> Bool {
+        guard let firmwareRevision else { return false }
+        let sanitized = firmwareRevision.split(separator: "-").first.map(String.init) ?? firmwareRevision
+        guard let current = SemVersion(sanitized),
+              let threshold = SemVersion("4.0.0")
+        else { return false }
+        return current >= threshold
+    }
+
+    func drainChunkQueue() {
+        guard readyForNextChunk else { return }
+        guard !chunkQueue.isEmpty else { return }
+
+        // Command characteristic discovery may lag behind queue population; wait until it's ready.
+        guard let cmdCharacteristic = discoveredCharacteristics.first(where: { $0.uuid == cmdCharacteristicUUID }) else { return }
+
+        let chunk = chunkQueue.removeFirst()
+        readyForNextChunk = false
+        peripheral.writeValue(chunk, for: cmdCharacteristic, type: .withResponse)
+    }
+
+    func handleCommandWriteResult(error: Error?) {
+        if let error {
+            resetBleQueue()
+            deviceDelegate?.didReceiveError(self, error: error)
+            return
+        }
+
+        readyForNextChunk = true
+        drainChunkQueue()
     }
 
     // -- AidlabSDK callback handlers ------------------------------------------
+
+    // BLE Communication callbacks
+    private let bleSendCallback: callbackBLESend = { context, data, size in
+        guard let context else { return }
+        let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
+
+        let dataArray = Array(UnsafeBufferPointer(start: data, count: Int(size)))
+        self_.sendRawBleData(dataArray)
+    }
+
+    private let bleReadyCallback: callbackBLEReady = { context in
+        guard let context else { return }
+        let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
+        self_.readyForNextChunk = true
+        self_.drainChunkQueue()
+    }
 
     private let didReceiveECG: callbackSampleTime = { context, timestamp, value in
         guard let context else { return }
@@ -321,6 +398,25 @@ public class Device: NSObject {
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
         self_.deviceDelegate?.didReceiveOrientation(self_, timestamp: timestamp, roll: roll, pitch: pitch, yaw: yaw)
+    }
+
+    private let didReceiveEDA: callbackEda = { context, timestamp, conductance in
+        guard let context else { return }
+        let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
+        self_.deviceDelegate?.didReceiveEDA(self_, timestamp: timestamp, conductance: conductance)
+    }
+
+    private let didReceiveGPS: callbackGps = { context, timestamp, latitude, longitude, altitude, speed, heading, hdop in
+        guard let context else { return }
+        let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
+        self_.deviceDelegate?.didReceiveGPS(self_,
+                                            timestamp: timestamp,
+                                            latitude: Double(latitude),
+                                            longitude: Double(longitude),
+                                            altitude: Double(altitude),
+                                            speed: speed,
+                                            heading: heading,
+                                            hdop: hdop)
     }
 
     private let didReceiveBodyPosition: callbackBodyPosition = { context, timestamp, bodyPosition in
@@ -383,25 +479,19 @@ public class Device: NSObject {
         self_.deviceDelegate?.didDetect(self_, timestamp: timestamp, activity: ActivityType(activityType: activity))
     }
 
-    private let didReceiveCommand: callbackReceivedCommand = { context in
-        guard let context else { return }
-        let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceiveCommand(self_)
-    }
-
-    private let didReceiveMessage: callbackMessage = { context, process, message in
+    private let didReceivePayload: callbackPayload = { context, process, payload, payloadLength in
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
 
-        if let cStringPointer_message = message {
-            if let string_message = String(validatingUTF8: cStringPointer_message) {
-                if let cStringPointer_process = process {
-                    if let string_process = String(validatingUTF8: cStringPointer_process) {
-                        self_.deviceDelegate?.didReceiveMessage(self_, process: string_process, message: string_message)
-                    }
-                }
-            }
+        let processString = process.map { String(cString: $0) } ?? "unknown"
+
+        let rawPayload = if let payload, payloadLength > 0 {
+            Data(bytes: payload, count: Int(payloadLength))
+        } else {
+            Data()
         }
+
+        self_.deviceDelegate?.didReceivePayload(self_, process: processString, payload: rawPayload)
     }
 
     private let didDetectUserEvent: callbackUserEvent = { context, timestamp in
@@ -414,23 +504,22 @@ public class Device: NSObject {
         /// Experimental
     }
 
-    private let didReceiveError: callbackError = { context, text in
+    private let didReceiveLogMessage: callbackLogMessage = { context, level, text in
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
 
-        if let cStringPointer = text {
-            if let string = String(validatingUTF8: cStringPointer) {
-                self_.deviceDelegate?.didReceiveError(self_, error: AidlabError(message: string))
-            } else {
-                self_.deviceDelegate?.didReceiveError(self_, error: AidlabError(message: "Unknown error"))
-            }
+        guard let cStringPointer = text,
+              let string = String(validatingCString: cStringPointer)
+        else { return }
+
+        if level.rawValue == 3 { self_.deviceDelegate?.didReceiveError(self_, error: AidlabError(message: string))
         }
     }
 
     private let didReceiveSignalQuality: callbackSignalQuality = { context, timestamp, value in
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceiveSignalQuality(timestamp, value: Int32(value))
+        self_.deviceDelegate?.didReceiveSignalQuality(self_, timestamp: timestamp, value: Int32(value))
     }
 
     private let didReceiveBatteryLevel: callbackBatteryLevel = { context, stateOfCharge in
@@ -466,7 +555,6 @@ public class Device: NSObject {
     private let didReceivePastHeartRate: callbackHeartRate = { context, timestamp, heartRate in
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-
         self_.deviceDelegate?.didReceivePastHeartRate(self_, timestamp: timestamp, heartRate: heartRate)
     }
 
@@ -544,6 +632,25 @@ public class Device: NSObject {
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
         self_.deviceDelegate?.didReceivePastOrientation(self_, timestamp: timestamp, roll: roll, pitch: pitch, yaw: yaw)
+    }
+
+    private let didReceivePastEDA: callbackEda = { context, timestamp, conductance in
+        guard let context else { return }
+        let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
+        self_.deviceDelegate?.didReceivePastEDA(self_, timestamp: timestamp, conductance: conductance)
+    }
+
+    private let didReceivePastGPS: callbackGps = { context, timestamp, latitude, longitude, altitude, speed, heading, hdop in
+        guard let context else { return }
+        let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
+        self_.deviceDelegate?.didReceivePastGPS(self_,
+                                                timestamp: timestamp,
+                                                latitude: Double(latitude),
+                                                longitude: Double(longitude),
+                                                altitude: Double(altitude),
+                                                speed: speed,
+                                                heading: heading,
+                                                hdop: hdop)
     }
 
     private let didReceivePastMagnetometer: callbackMagnetometer = { context, timestamp, mx, my, mz in

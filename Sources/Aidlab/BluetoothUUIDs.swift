@@ -6,62 +6,68 @@
 import CoreBluetooth
 import Foundation
 
-@MainActor let userServiceUUID = CBUUID(string: "44366E80-CF3A-11E1-9AB4-0002A5D5C51B")
-@MainActor let cmdCharacteristicUUID = CBUUID(string: "51366E80-CF3A-11E1-9AB4-0002A5D5C51B")
-
-@MainActor enum DeviceInformationService {
-    static let uuid = CBUUID(string: "180A")
-    static let manufacturerNameStringCharacteristic = CBUUID(string: "2A29")
-    static let serialNumberStringCharacteristic = CBUUID(string: "2A25")
-    static let firmwareRevisionStringCharacteristic = CBUUID(string: "2A26")
-    static let hardwareRevisionStringCharacteristic = CBUUID(string: "2A27")
+private func makeUUID(_ string: String) -> CBUUID {
+    CBUUID(string: string)
 }
 
-@MainActor enum CurrentTimeService {
-    static let uuid = CBUUID(string: "1805")
-    static let currentTimeCharacteristic = CBUUID(string: "2A2B")
+var userServiceUUID: CBUUID { makeUUID("44366E80-CF3A-11E1-9AB4-0002A5D5C51B") }
+var cmdCharacteristicUUID: CBUUID { makeUUID("51366E80-CF3A-11E1-9AB4-0002A5D5C51B") }
+
+enum DeviceInformationService {
+    static var uuid: CBUUID { makeUUID("180A") }
+    static var manufacturerNameStringCharacteristic: CBUUID { makeUUID("2A29") }
+    static var serialNumberStringCharacteristic: CBUUID { makeUUID("2A25") }
+    static var firmwareRevisionStringCharacteristic: CBUUID { makeUUID("2A26") }
+    static var hardwareRevisionStringCharacteristic: CBUUID { makeUUID("2A27") }
 }
 
-@MainActor enum BatteryLevelService {
-    static let uuid = CBUUID(string: "180F")
-    static let batteryLevelCharacteristic = CBUUID(string: "2A19")
+enum CurrentTimeService {
+    static var uuid: CBUUID { makeUUID("1805") }
+    static var currentTimeCharacteristic: CBUUID { makeUUID("2A2B") }
+}
+
+enum BatteryLevelService {
+    static var uuid: CBUUID { makeUUID("180F") }
+    static var batteryLevelCharacteristic: CBUUID { makeUUID("2A19") }
 }
 
 /// Legacy services and characteristics
-@MainActor let temperatureCharacteristicUUID = CBUUID(string: "45366E80-CF3A-11E1-9AB4-0002A5D5C51B")
-@MainActor let ecgCharacteristicUUID = CBUUID(string: "46366E80-CF3A-11E1-9AB4-0002A5D5C51B")
-@MainActor let batteryCharacteristicUUID = CBUUID(string: "47366E80-CF3A-11E1-9AB4-0002A5D5C51B")
-@MainActor let respirationCharacteristicUUID = CBUUID(string: "48366E80-CF3A-11E1-9AB4-0002A5D5C51B")
-@MainActor let motionCharacteristicUUID = CBUUID(string: "49366E80-CF3A-11E1-9AB4-0002A5D5C51B")
-@MainActor let soundVolumeCharacteristicUUID = CBUUID(string: "52366E80-CF3A-11E1-9AB4-0002A5D5C51B")
-@MainActor let nasalCannulaCharacteristicUUID = CBUUID(string: "53366E80-CF3A-11E1-9AB4-0002A5D5C51B")
-@MainActor let soundFeaturesCharacteristicUUID = CBUUID(string: "54366E80-CF3A-11E1-9AB4-0002A5D5C51B")
+var temperatureCharacteristicUUID: CBUUID { makeUUID("45366E80-CF3A-11E1-9AB4-0002A5D5C51B") }
+var ecgCharacteristicUUID: CBUUID { makeUUID("46366E80-CF3A-11E1-9AB4-0002A5D5C51B") }
+var batteryCharacteristicUUID: CBUUID { makeUUID("47366E80-CF3A-11E1-9AB4-0002A5D5C51B") }
+var respirationCharacteristicUUID: CBUUID { makeUUID("48366E80-CF3A-11E1-9AB4-0002A5D5C51B") }
+var motionCharacteristicUUID: CBUUID { makeUUID("49366E80-CF3A-11E1-9AB4-0002A5D5C51B") }
+var soundVolumeCharacteristicUUID: CBUUID { makeUUID("52366E80-CF3A-11E1-9AB4-0002A5D5C51B") }
+var nasalCannulaCharacteristicUUID: CBUUID { makeUUID("53366E80-CF3A-11E1-9AB4-0002A5D5C51B") }
+var soundFeaturesCharacteristicUUID: CBUUID { makeUUID("54366E80-CF3A-11E1-9AB4-0002A5D5C51B") }
 
-@MainActor enum MotionService {
-    static let uuid = CBUUID(string: "60366E80-CF3A-11E1-9AB4-0002A5D5C51B")
-    static let activityUUID = CBUUID(string: "61366E80-CF3A-11E1-9AB4-0002A5D5C51B")
-    static let stepsUUID = CBUUID(string: "62366E80-CF3A-11E1-9AB4-0002A5D5C51B")
-    static let orientationUUID = CBUUID(string: "63366E80-CF3A-11E1-9AB4-0002A5D5C51B")
+enum MotionService {
+    static var uuid: CBUUID { makeUUID("60366E80-CF3A-11E1-9AB4-0002A5D5C51B") }
+    static var activityUUID: CBUUID { makeUUID("61366E80-CF3A-11E1-9AB4-0002A5D5C51B") }
+    static var stepsUUID: CBUUID { makeUUID("62366E80-CF3A-11E1-9AB4-0002A5D5C51B") }
+    static var orientationUUID: CBUUID { makeUUID("63366E80-CF3A-11E1-9AB4-0002A5D5C51B") }
 }
 
-@MainActor enum HeartRateService {
-    static let uuid = CBUUID(string: "180D")
-    static let heartRateMeasurementCharacteristic = CBUUID(string: "2A37")
+enum HeartRateService {
+    static var uuid: CBUUID { makeUUID("180D") }
+    static var heartRateMeasurementCharacteristic: CBUUID { makeUUID("2A37") }
 }
 
-@MainActor enum HealthThermometerService {
-    static let uuid = CBUUID(string: "1809")
-    static let temperatureMeasurementCharacteristic = CBUUID(string: "2A1C")
+enum HealthThermometerService {
+    static var uuid: CBUUID { makeUUID("1809") }
+    static var temperatureMeasurementCharacteristic: CBUUID { makeUUID("2A1C") }
 }
 
-@MainActor let dataTypesUUID: [DataType: CBUUID] = [
-    DataType.activity: MotionService.activityUUID,
-    DataType.steps: MotionService.stepsUUID,
-    DataType.orientation: MotionService.orientationUUID,
-    DataType.heartRate: HeartRateService.heartRateMeasurementCharacteristic,
-    DataType.soundVolume: soundVolumeCharacteristicUUID,
-    DataType.skinTemperature: temperatureCharacteristicUUID,
-    DataType.motion: motionCharacteristicUUID,
-    DataType.ecg: ecgCharacteristicUUID,
-    DataType.respiration: respirationCharacteristicUUID,
-]
+var dataTypesUUID: [DataType: CBUUID] {
+    [
+        DataType.activity: MotionService.activityUUID,
+        DataType.steps: MotionService.stepsUUID,
+        DataType.orientation: MotionService.orientationUUID,
+        DataType.heartRate: HeartRateService.heartRateMeasurementCharacteristic,
+        DataType.soundVolume: soundVolumeCharacteristicUUID,
+        DataType.skinTemperature: temperatureCharacteristicUUID,
+        DataType.motion: motionCharacteristicUUID,
+        DataType.ecg: ecgCharacteristicUUID,
+        DataType.respiration: respirationCharacteristicUUID,
+    ]
+}

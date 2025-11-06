@@ -23,6 +23,7 @@ extension Device: @preconcurrency CBPeripheralDelegate {
         if service.uuid == userServiceUUID {
             for characteristic in serviceCharacteristics where characteristic.uuid == cmdCharacteristicUUID {
                 peripheral.setNotifyValue(true, for: characteristic)
+                drainChunkQueue()
             }
         } else if service.uuid == DeviceInformationService.uuid {
             for characteristic in serviceCharacteristics {
@@ -98,10 +99,10 @@ extension Device: @preconcurrency CBPeripheralDelegate {
             processMotionPackage(&scratchVal, Int32(value.count), aidlabSDK)
 
         case cmdCharacteristicUUID:
+            guard let aidlabSDK else { return }
             var scratchVal: [UInt8] = Array(repeating: 0, count: value.count)
             (value as NSData).getBytes(&scratchVal, length: value.count)
-            bytes += value.count
-            AidlabSDK_process_command(&scratchVal, Int32(value.count), aidlabSDK)
+            AidlabSDK_process_ble_chunk(&scratchVal, Int32(value.count), aidlabSDK)
 
         case soundVolumeCharacteristicUUID:
             var scratchVal: [UInt8] = Array(repeating: 0, count: value.count)
@@ -151,6 +152,11 @@ extension Device: @preconcurrency CBPeripheralDelegate {
         default:
             break
         }
+    }
+
+    public func peripheral(_: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
+        guard characteristic.uuid == cmdCharacteristicUUID else { return }
+        handleCommandWriteResult(error: error)
     }
 
     public func peripheral(_: CBPeripheral, didReadRSSI RSSI: NSNumber, error: Error?) {

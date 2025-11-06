@@ -16,14 +16,12 @@ extension Device {
         }
     }
 
-    func onDisconnectPeripheral(timestamp _: CFAbsoluteTime, isReconnecting _: Bool, error _: Error?) {}
-
     func onDidConnect() {
         peripheral.discoverServices(readWriteServices)
         peripheral.discoverServices(notifyServices)
     }
 
-    func onDisconnectPeripheral(error: Error?) {
+    func onDisconnectPeripheral(timestamp _: CFAbsoluteTime?, isReconnecting _: Bool?, error: Error?) {
         var disconnectReason = DisconnectReason.deviceDisconnected
 
         if let error = error as NSError? {
@@ -44,8 +42,13 @@ extension Device {
         }
 
         peripheral.delegate = nil
+        resetBleQueue()
 
-        AidlabSDK_destroy(aidlabSDK)
+        if let aidlabSDK {
+            AidlabSDK_set_log_callback(nil, nil, aidlabSDK)
+            AidlabSDK_set_context(nil, aidlabSDK)
+            AidlabSDK_destroy(aidlabSDK)
+        }
         aidlabSDK = nil
 
         deviceDelegate?.didDisconnect(self, reason: disconnectReason)
