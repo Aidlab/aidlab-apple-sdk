@@ -68,7 +68,7 @@ public class Device: NSObject {
                 let liveHex = String(format: "%08X", liveFlags)
                 let syncHex = String(format: "%08X", syncFlags)
                 let collectCommand = "collect flags \(liveHex) \(syncHex)"
-                send(collectCommand, processId: 0)
+                send(commandBytes(collectCommand), processId: 0)
             } else {
                 // Build binary command for older firmware
                 let prefix = "collect on "
@@ -86,8 +86,7 @@ public class Device: NSObject {
                 buffer.append(UInt8((syncFlags >> 8) & 0xFF))
                 buffer.append(UInt8((syncFlags >> 0) & 0xFF))
 
-                var dataArray = buffer
-                AidlabSDK_send(&dataArray, Int32(dataArray.count), 0, aidlabSDK)
+                send(buffer, processId: 0)
             }
 
             if let characteristic = discoveredCharacteristics.first(where: { $0.uuid == BatteryLevelService.batteryLevelCharacteristic }) {
@@ -114,11 +113,11 @@ public class Device: NSObject {
     }
 
     public func startSynchronization() {
-        send("sync start")
+        send(commandBytes("sync start"))
     }
 
     public func stopSynchronization() {
-        send("sync stop")
+        send(commandBytes("sync stop"))
     }
 
     public func setTime(_ timestamp: UInt32) {
@@ -144,12 +143,13 @@ public class Device: NSObject {
     }
 
     public func send(_ message: String, processId: Int = 0) {
-        guard let aidlabSDK else { return }
+        send(commandBytes(message), processId: processId)
+    }
 
-        let messageData = message.utf8.map { UInt8($0) }
-        var dataArray = messageData
-
-        AidlabSDK_send(&dataArray, Int32(dataArray.count), Int32(processId), aidlabSDK)
+    public func send(_ payload: [UInt8], processId: Int = 0) {
+        guard let aidlabSDK, !payload.isEmpty else { return }
+        var buffer = payload
+        AidlabSDK_send(&buffer, Int32(buffer.count), Int32(processId), aidlabSDK)
     }
 
     // -- Internal -------------------------------------------------------------
@@ -300,6 +300,10 @@ public class Device: NSObject {
     func resetBleQueue() {
         chunkQueue.removeAll(keepingCapacity: false)
         readyForNextChunk = true
+    }
+
+    private func commandBytes(_ command: String) -> [UInt8] {
+        Array(command.utf8)
     }
 
     private func supportsExtendedMtu() -> Bool {
