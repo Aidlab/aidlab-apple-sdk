@@ -1,6 +1,6 @@
 //
 //  Created by Szymon Gesicki on 29.02.2020.
-//  Copyright © 2017-2024 Aidlab. All rights reserved.
+//  Copyright © 2017-2025 Aidlab. All rights reserved.
 //
 //  Aidlab C++ SDK facilitates the process of exchanging information and receiving events from Aidlab and Aidmed One.
 //  The SDK offers packet compression mechanisms, backward compatibility, filtration, and simple data analysis.
@@ -8,12 +8,12 @@
 //  Note: Aidlab C++ SDK **does not** handle Bluetooth communication.
 //
 
-#ifndef SHARED_H__
-#define SHARED_H__
+#ifndef SHARED_H_
+#define SHARED_H_
 
 #include <stdbool.h>
-#include <stdint.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -94,7 +94,8 @@ typedef void (*callbackPressure)(void*, uint64_t, int);
 typedef void (*callbackSoundFeatures)(void*, uint64_t, float*, int);
 typedef void (*callbackSignalQuality)(void*, uint64_t, uint8_t);
 typedef void (*callbackEda)(void*, uint64_t, float);  // timestamp, conductance (µS)
-typedef void (*callbackGps)(void*, uint64_t, float, float, float, float, float, float);  // timestamp, lat, lon, alt, speed, heading, hdop
+typedef void (*callbackGps)(void*, uint64_t, float, float, float, float, float,
+                            float);  // timestamp, lat, lon, alt, speed, heading, hdop
 typedef void (*callbackUnsynchronizedSize)(void*, uint32_t, float);
 typedef void (*callbackSyncState)(void*, SyncState);
 typedef void (*callbackUserEvent)(void*, uint64_t);
@@ -151,8 +152,10 @@ SHARED_EXPORT void AidlabSDK_process_ble_chunk(const uint8_t* data, int size, vo
 /// Each device should have a unique instance of AidlabSDK.
 /// This should be created upon successful connection to the device and discovery of all device's Bluetooth services.
 ///
-/// @return Pointer to the Aidlab SDK instance.
-SHARED_EXPORT void* AidlabSDK_create();
+/// @param fwRevision Pointer to the firmware revision string (UTF-8, not null-terminated required)
+/// @param size Size of the firmware revision string.
+/// @return Pointer to the Aidlab SDK instance, or nullptr when firmware revision is invalid.
+SHARED_EXPORT void* AidlabSDK_create(const uint8_t* fwRevision, int size);
 
 /// Destroys the Aidlab SDK instance.
 /// Should be called after disconnecting from the device.
@@ -197,29 +200,6 @@ SHARED_EXPORT void AidlabSDK_set_payload_callback(callbackPayload callback, void
 /// @param aidlabSDK Pointer to the Aidlab SDK instance.
 SHARED_EXPORT void AidlabSDK_set_log_callback(callbackLogMessage callback, void* context, void* aidlabSDK);
 
-// AidlabSDK_set_mtu removed - MTU handling is now platform's responsibility
-
-/// @brief Sets the hardware revision string.
-/// This function is required and should be called immediately after `AidlabSDK_create`.
-///
-/// @param hwRevision Pointer to the hardware revision string.
-/// @param size Size of the hardware revision string.
-/// @param aidlabSDK Pointer to the Aidlab SDK instance.
-SHARED_EXPORT void AidlabSDK_set_hardware_revision(uint8_t* hwRevision, int size, void* aidlabSDK);
-
-/// @brief Sets the firmware revision string.
-/// This function is required and should be called immediately after `AidlabSDK_create`.
-///
-/// @param fwRevision Pointer to the firmware revision string.
-/// @param size Size of the firmware revision string.
-/// @param aidlabSDK Pointer to the Aidlab SDK instance.
-SHARED_EXPORT void AidlabSDK_set_firmware_revision(uint8_t* fwRevision, int size, void* aidlabSDK);
-
-/// @brief Sets the aggressive ECG filtration.
-///
-/// @param value Boolean value to enable/disable aggressive filtration.
-/// @param aidlabSDK Pointer to the Aidlab SDK instance.
-SHARED_EXPORT void AidlabSDK_set_aggressive_ecg_filtration(bool value, void* aidlabSDK);
 SHARED_EXPORT void AidlabSDK_set_eda_callback(callbackEda eda, void* aidlabSDK);
 SHARED_EXPORT void AidlabSDK_set_gps_callback(callbackGps gps, void* aidlabSDK);
 SHARED_EXPORT void AidlabSDK_set_past_eda_callback(callbackEda eda, void* aidlabSDK);

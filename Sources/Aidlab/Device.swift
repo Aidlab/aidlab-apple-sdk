@@ -131,25 +131,10 @@ public class Device: NSObject {
         peripheral.writeValue(payload, for: currentTimeCharacteristic, type: .withResponse)
     }
 
-    public func setECGFiltrationMethod(_ ecgFiltrationMethod: ECGFiltrationMethod) {
-        guard let aidlabSDK else { return }
-
-        switch ecgFiltrationMethod {
-        case .normal:
-            AidlabSDK_set_aggressive_ecg_filtration(false, aidlabSDK)
-        case .aggressive:
-            AidlabSDK_set_aggressive_ecg_filtration(true, aidlabSDK)
-        }
-    }
-
-    public func send(_ message: String, processId: Int = 0) {
-        send(commandBytes(message), processId: processId)
-    }
-
-    public func send(_ payload: [UInt8], processId: Int = 0) {
-        guard let aidlabSDK, !payload.isEmpty else { return }
-        var buffer = payload
-        AidlabSDK_send(&buffer, Int32(buffer.count), Int32(processId), aidlabSDK)
+    public func send(_ bytes: [UInt8], processId: Int = 0) {
+        guard let aidlabSDK, !bytes.isEmpty else { return }
+        var payload = bytes
+        AidlabSDK_send(&payload, Int32(payload.count), Int32(processId), aidlabSDK)
     }
 
     // -- Internal -------------------------------------------------------------
@@ -196,13 +181,14 @@ public class Device: NSObject {
     }
 
     func createAidlabSDK() {
-        aidlabSDK = AidlabSDK_create()
-        resetBleQueue()
-
-        guard let firmwareRevision, let hardwareRevision else {
-            deviceDelegate?.didReceiveError(self, error: AidlabError(message: "Internal error"))
+        guard let firmwareRevision else {
+            deviceDelegate?.didReceiveError(self, error: AidlabError(message: "Missing firmware revision"))
             return
         }
+
+        var fwVersion: [UInt8] = Array(firmwareRevision.utf8)
+        aidlabSDK = AidlabSDK_create(&fwVersion, Int32(fwVersion.count))
+        resetBleQueue()
 
         guard let aidlabSDK else {
             deviceDelegate?.didReceiveError(self, error: AidlabError(message: "Internal error"))
@@ -212,12 +198,6 @@ public class Device: NSObject {
         let context = Unmanaged.passUnretained(self).toOpaque()
         AidlabSDK_set_context(context, aidlabSDK)
         AidlabSDK_set_log_callback(didReceiveLogMessage, context, aidlabSDK)
-
-        var fwVersion: [UInt8] = Array(firmwareRevision.utf8)
-        AidlabSDK_set_firmware_revision(&fwVersion, Int32(fwVersion.count), aidlabSDK)
-
-        var hwVersion: [UInt8] = Array(hardwareRevision.utf8)
-        AidlabSDK_set_hardware_revision(&hwVersion, Int32(hwVersion.count), aidlabSDK)
 
         AidlabSDK_set_ble_send_callback(bleSendCallback, aidlabSDK)
         AidlabSDK_set_ble_ready_callback(bleReadyCallback, aidlabSDK)
@@ -302,10 +282,6 @@ public class Device: NSObject {
         readyForNextChunk = true
     }
 
-    private func commandBytes(_ command: String) -> [UInt8] {
-        Array(command.utf8)
-    }
-
     private func supportsExtendedMtu() -> Bool {
         guard let firmwareRevision else { return false }
         let sanitized = firmwareRevision.split(separator: "-").first.map(String.init) ?? firmwareRevision
@@ -313,6 +289,14 @@ public class Device: NSObject {
               let threshold = SemVersion("4.0.0")
         else { return false }
         return current >= threshold
+    }
+
+    private func commandBytes(_ command: String) -> [UInt8] {
+        var bytes = Array(command.utf8)
+        if bytes.isEmpty || bytes.last != 0 {
+            bytes.append(0)
+        }
+        return bytes
     }
 
     func drainChunkQueue() {

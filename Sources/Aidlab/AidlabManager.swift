@@ -6,11 +6,6 @@
 import CoreBluetooth
 import Foundation
 
-public enum ECGFiltrationMethod {
-    case normal
-    case aggressive
-}
-
 public enum DisconnectReason: Int {
     case timeout = 0
     case deviceDisconnected = 1
