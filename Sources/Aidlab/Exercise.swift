@@ -6,7 +6,7 @@
 import AidlabSDK
 import Foundation
 
-public enum Exercise {
+public enum Exercise: Int {
     init(exercise: AidlabSDK.Exercise) {
         switch exercise {
         case AidlabSDK.none:
@@ -32,13 +32,13 @@ public enum Exercise {
         }
     }
 
-    case none
-    case pushUp
-    case jump
-    case sitUp
-    case burpee
-    case pullUp
-    case squat
-    case plankStart
-    case plankEnd
+    case none = -1
+    case pushUp = 0
+    case jump = 1
+    case sitUp = 2
+    case burpee = 3
+    case pullUp = 4
+    case squat = 5
+    case plankStart = 6
+    case plankEnd = 7
 }

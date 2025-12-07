@@ -457,6 +457,7 @@ public class Device: NSObject {
 
     private let didDetect: callback_function = { context, exercise in
         guard let context else { return }
+        if exercise == AidlabSDK.none { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
         self_.deviceDelegate?.didDetect(self_, exercise: Exercise(exercise: exercise))
     }
