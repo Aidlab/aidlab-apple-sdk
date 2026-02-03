@@ -17,8 +17,14 @@ extension Device {
     }
 
     func onDidConnect() {
+        peripheral.delegate = self
+        discoveredCharacteristics.removeAll(keepingCapacity: false)
         peripheral.discoverServices(readWriteServices)
         peripheral.discoverServices(notifyServices)
+
+        if aidlabSDK == nil, serialNumber != nil, firmwareRevision != nil, hardwareRevision != nil {
+            didConnect()
+        }
     }
 
     func onDisconnectPeripheral(timestamp _: CFAbsoluteTime?, isReconnecting _: Bool?, error: Error?) {
@@ -43,6 +49,7 @@ extension Device {
 
         peripheral.delegate = nil
         resetBleQueue()
+        discoveredCharacteristics.removeAll(keepingCapacity: false)
 
         if let aidlabSDK {
             AidlabSDK_set_log_callback(nil, nil, aidlabSDK)

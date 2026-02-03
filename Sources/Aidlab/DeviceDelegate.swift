@@ -30,6 +30,8 @@ public protocol DeviceDelegate: AnyObject {
 
     func didReceiveEDA(_ device: Device, timestamp: UInt64, conductance: Float)
 
+    /// - Parameters:
+    ///   - speed: Speed in meters per second (m/s), compatible with CoreLocation.
     func didReceiveGPS(_ device: Device, timestamp: UInt64, latitude: Double, longitude: Double, altitude: Double, speed: Float, heading: Float, hdop: Float)
 
     func didReceiveBodyPosition(_ device: Device, timestamp: UInt64, bodyPosition: BodyPosition)
@@ -107,6 +109,8 @@ public protocol DeviceDelegate: AnyObject {
 
     func didReceivePastEDA(_ device: Device, timestamp: UInt64, conductance: Float)
 
+    /// - Parameters:
+    ///   - speed: Speed in meters per second (m/s), compatible with CoreLocation.
     func didReceivePastGPS(_ device: Device, timestamp: UInt64, latitude: Double, longitude: Double, altitude: Double, speed: Float, heading: Float, hdop: Float)
 
     func didReceivePastBodyPosition(_ device: Device, timestamp: UInt64, bodyPosition: BodyPosition)

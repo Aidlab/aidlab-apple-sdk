@@ -39,7 +39,6 @@ var respirationCharacteristicUUID: CBUUID { makeUUID("48366E80-CF3A-11E1-9AB4-00
 var motionCharacteristicUUID: CBUUID { makeUUID("49366E80-CF3A-11E1-9AB4-0002A5D5C51B") }
 var soundVolumeCharacteristicUUID: CBUUID { makeUUID("52366E80-CF3A-11E1-9AB4-0002A5D5C51B") }
 var nasalCannulaCharacteristicUUID: CBUUID { makeUUID("53366E80-CF3A-11E1-9AB4-0002A5D5C51B") }
-var soundFeaturesCharacteristicUUID: CBUUID { makeUUID("54366E80-CF3A-11E1-9AB4-0002A5D5C51B") }
 
 enum MotionService {
     static var uuid: CBUUID { makeUUID("60366E80-CF3A-11E1-9AB4-0002A5D5C51B") }
@@ -68,6 +67,6 @@ var dataTypesUUID: [DataType: CBUUID] {
         DataType.skinTemperature: temperatureCharacteristicUUID,
         DataType.motion: motionCharacteristicUUID,
         DataType.ecg: ecgCharacteristicUUID,
-        DataType.respiration: respirationCharacteristicUUID
+        DataType.respiration: respirationCharacteristicUUID,
     ]
 }

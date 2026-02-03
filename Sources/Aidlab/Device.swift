@@ -29,6 +29,7 @@ public class Device: NSObject {
 
     public func connect(delegate: DeviceDelegate) {
         deviceDelegate = delegate
+        peripheral.delegate = self
 
         AidlabManager.centralManager?.connect(peripheral)
     }
@@ -489,10 +490,6 @@ public class Device: NSObject {
         self_.deviceDelegate?.didDetectUserEvent(self_, timestamp: timestamp)
     }
 
-    private let didReceiveSoundFeatures: callbackSoundFeatures = { _, _, _, _ in
-        /// Experimental
-    }
-
     private let didReceiveLogMessage: callbackLogMessage = { context, level, text in
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
@@ -593,10 +590,6 @@ public class Device: NSObject {
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
         self_.deviceDelegate?.didReceivePastPressure(self_, timestamp: timestamp, value: value)
-    }
-
-    private let didReceivePastSoundFeatures: callbackSoundFeatures = { _, _, _, _ in
-        /// Experimental
     }
 
     private let didReceivePastAccelerometer: callbackAccelerometer = { context, timestamp, ax, ay, az in

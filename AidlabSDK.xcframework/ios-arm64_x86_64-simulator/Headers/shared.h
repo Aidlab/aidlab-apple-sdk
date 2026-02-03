@@ -91,11 +91,10 @@ typedef void (*callbackHeartRate)(void*, uint64_t, int);
 typedef void (*callbackRr)(void*, uint64_t, int);
 typedef void (*callbackSoundVolume)(void*, uint64_t, uint16_t);
 typedef void (*callbackPressure)(void*, uint64_t, int);
-typedef void (*callbackSoundFeatures)(void*, uint64_t, float*, int);
 typedef void (*callbackSignalQuality)(void*, uint64_t, uint8_t);
 typedef void (*callbackEda)(void*, uint64_t, float);  // timestamp, conductance (µS)
 typedef void (*callbackGps)(void*, uint64_t, float, float, float, float, float,
-                            float);  // timestamp, lat, lon, alt, speed, heading, hdop
+                            float);  // timestamp, lat, lon, alt, speed (m/s), heading, hdop
 typedef void (*callbackUnsynchronizedSize)(void*, uint32_t, float);
 typedef void (*callbackSyncState)(void*, SyncState);
 typedef void (*callbackUserEvent)(void*, uint64_t);
@@ -240,7 +239,6 @@ SHARED_EXPORT void processHealthThermometerPackage(const uint8_t* data, int size
 SHARED_EXPORT void processHeartRatePackage(const uint8_t* data, int size, void* aidlabSDK);
 SHARED_EXPORT void processSoundVolumePackage(const uint8_t* data, int size, void* aidlabSDK);
 SHARED_EXPORT void processNasalCannulaPackage(const uint8_t* data, int size, void* aidlabSDK);
-SHARED_EXPORT void processSoundFeaturesPackage(const uint8_t* data, int size, void* aidlabSDK);
 #ifdef __cplusplus
 }
 #endif

@@ -114,11 +114,6 @@ extension Device: @preconcurrency CBPeripheralDelegate {
             (value as NSData).getBytes(&scratchVal, length: value.count)
             processNasalCannulaPackage(&scratchVal, Int32(value.count), aidlabSDK)
 
-        case soundFeaturesCharacteristicUUID:
-            var scratchVal: [UInt8] = Array(repeating: 0, count: value.count)
-            (value as NSData).getBytes(&scratchVal, length: value.count)
-            processSoundFeaturesPackage(&scratchVal, Int32(value.count), aidlabSDK)
-
         case MotionService.stepsUUID:
             var scratchVal: [UInt8] = Array(repeating: 0, count: value.count)
             (value as NSData).getBytes(&scratchVal, length: value.count)
