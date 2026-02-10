@@ -7,7 +7,7 @@ import AidlabSDK
 import CoreBluetooth
 import Foundation
 
-extension Device: @preconcurrency CBPeripheralDelegate {
+extension Device: CBPeripheralDelegate {
     public func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
         if let error {
             deviceDelegate?.didReceiveError(self, error: error)

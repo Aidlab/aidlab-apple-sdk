@@ -40,7 +40,7 @@ public class Device: NSObject {
     }
 
     public func collect(dataTypes: [DataType], dataTypesToStore: [DataType]) {
-        guard let aidlabSDK else {
+        guard aidlabSDK != nil else {
             deviceDelegate?.didReceiveError(self, error: AidlabError(message: "API misuse: Attempt to use the API without an established connection. Please ensure the device is connected using the connect() method before invoking this API."))
             return
         }

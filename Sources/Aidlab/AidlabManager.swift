@@ -19,7 +19,7 @@ public enum ScanMode: Int {
     case aggressive = 1
 }
 
-public final class AidlabManager: NSObject, @preconcurrency CBCentralManagerDelegate {
+public final class AidlabManager: NSObject, CBCentralManagerDelegate {
     public var legacyAutoPair: Bool = true
 
     public init(delegate: AidlabManagerDelegate) {
