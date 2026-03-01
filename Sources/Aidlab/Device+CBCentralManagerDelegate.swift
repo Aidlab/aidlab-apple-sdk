@@ -3,62 +3,41 @@
 //  Copyright © 2023-2024 Aidlab. All rights reserved.
 //
 
-import AidlabSDK
 import CoreBluetooth
 import Foundation
 
 extension Device {
-    func onFailToConnect(error: Error?) {
-        if let error {
-            deviceDelegate?.didReceiveError(self, error: error)
-        } else {
-            deviceDelegate?.didReceiveError(self, error: AidlabError(message: "Fail to connect"))
+    public func notifyDidFailToConnect(error: Error?) {
+        if let forwarding = transport as? CoreBluetoothLifecycleForwarding {
+            forwarding.notifyDidFailToConnect(error: error)
+            return
         }
+        let resolvedError = error ?? AidlabError(message: "Fail to connect")
+        deviceDelegate?.didReceiveError(self, error: resolvedError)
+    }
+
+    public func notifyDidConnect() {
+        (transport as? CoreBluetoothLifecycleForwarding)?.notifyDidConnect()
+    }
+
+    public func notifyDidDisconnect(timestamp _: CFAbsoluteTime? = nil, isReconnecting _: Bool? = nil, error: Error?) {
+        if let forwarding = transport as? CoreBluetoothLifecycleForwarding {
+            forwarding.notifyDidDisconnect(error: error)
+            return
+        }
+        handleDisconnected(reason: .deviceDisconnected)
+    }
+
+    // Backward-compatible aliases for in-module calls.
+    func onFailToConnect(error: Error?) {
+        notifyDidFailToConnect(error: error)
     }
 
     func onDidConnect() {
-        peripheral.delegate = self
-        discoveredCharacteristics.removeAll(keepingCapacity: false)
-        peripheral.discoverServices(readWriteServices)
-        peripheral.discoverServices(notifyServices)
-
-        if aidlabSDK == nil, serialNumber != nil, firmwareRevision != nil, hardwareRevision != nil {
-            didConnect()
-        }
+        notifyDidConnect()
     }
 
-    func onDisconnectPeripheral(timestamp _: CFAbsoluteTime?, isReconnecting _: Bool?, error: Error?) {
-        var disconnectReason = DisconnectReason.deviceDisconnected
-
-        if let error = error as NSError? {
-            if error.code == 6 {
-                disconnectReason = .timeout
-            } else if error.code == 7 {
-                disconnectReason = .deviceDisconnected
-            } else {
-                disconnectReason = .unknownError
-            }
-
-            deviceDelegate?.didReceiveError(self, error: error)
-        }
-
-        if !checkCompatibility() {
-            deviceDelegate?.didReceiveError(self, error: AidlabError(message: "Unsupported SDK"))
-            disconnectReason = .sdkOutdated
-        }
-
-        peripheral.delegate = nil
-        resetBleQueue()
-        discoveredCharacteristics.removeAll(keepingCapacity: false)
-
-        if let aidlabSDK {
-            AidlabSDK_set_log_callback(nil, nil, aidlabSDK)
-            AidlabSDK_set_context(nil, aidlabSDK)
-            AidlabSDK_destroy(aidlabSDK)
-        }
-        aidlabSDK = nil
-
-        deviceDelegate?.didDisconnect(self, reason: disconnectReason)
-        deviceDelegate = nil
+    func onDisconnectPeripheral(timestamp: CFAbsoluteTime?, isReconnecting: Bool?, error: Error?) {
+        notifyDidDisconnect(timestamp: timestamp, isReconnecting: isReconnecting, error: error)
     }
 }

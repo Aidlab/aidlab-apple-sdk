@@ -4,39 +4,92 @@
 //
 
 import AidlabSDK
-import CoreBluetooth
+@preconcurrency import CoreBluetooth
 import Foundation
 
-public class Device: NSObject {
+public class Device: NSObject, @unchecked Sendable {
     public var name: String?
     public var firmwareRevision: String?
     public var hardwareRevision: String?
     public var serialNumber: String?
     public var manufacturerName: String?
     public var address: UUID
-    public var rssi: NSNumber
+    public var rssi: NSNumber {
+        get { transport.rssi }
+        set { transport.rssi = newValue }
+    }
 
-    public var peripheral: CBPeripheral
+    let transport: AidlabTransport
+    private var activeNotificationUUIDs: Set<CBUUID> = []
+    private var didHandleDisconnect = false
 
-    init(peripheral: CBPeripheral, rssi: NSNumber) {
-        self.peripheral = peripheral
-        address = peripheral.identifier
-        name = peripheral.name
-        self.rssi = rssi
+    /// Backwards-compatible access to the underlying CoreBluetooth peripheral, if applicable.
+    public var peripheral: CBPeripheral? {
+        (transport as? CoreBluetoothAidlabTransport)?.peripheral
+    }
+
+    public init(transport: AidlabTransport) {
+        self.transport = transport
+        address = transport.address
+        name = transport.name
         super.init()
-        peripheral.delegate = self
+
+        if let coreBluetoothTransport = transport as? CoreBluetoothAidlabTransport {
+            coreBluetoothTransport.onRSSIRead = { [weak self] rssi in
+                guard let self else { return }
+                deviceDelegate?.didUpdateRSSI(self, rssi: rssi.int32Value)
+            }
+        }
+    }
+
+    public convenience init(peripheral: CBPeripheral, rssi: NSNumber) {
+        let defaultTransport =
+            CoreBluetoothAidlabTransport(
+                peripheral: peripheral,
+                rssi: rssi,
+                centralManagerProvider: { AidlabManager.centralManager }
+            )
+        self.init(transport: defaultTransport)
+    }
+
+    public convenience init(peripheral: CBPeripheral, rssi: NSNumber, centralManager: CBCentralManager) {
+        let defaultTransport =
+            CoreBluetoothAidlabTransport(
+                peripheral: peripheral,
+                rssi: rssi,
+                centralManager: centralManager
+            )
+        self.init(transport: defaultTransport)
     }
 
     public func connect(delegate: DeviceDelegate) {
         deviceDelegate = delegate
-        peripheral.delegate = self
+        resetBleQueue()
+        didHandleDisconnect = false
+        stopAllNotifications()
 
-        AidlabManager.centralManager?.connect(peripheral)
+        transport.onDisconnect = { [weak self] reason, error in
+            guard let self else { return }
+            if let error {
+                deviceDelegate?.didReceiveError(self, error: error)
+            }
+            handleDisconnected(reason: reason)
+        }
+
+        transport.connect { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success:
+                onTransportConnected()
+            case let .failure(error):
+                deviceDelegate?.didReceiveError(self, error: error)
+            }
+        }
     }
 
     public func disconnect() {
         resetBleQueue()
-        AidlabManager.centralManager?.cancelPeripheralConnection(peripheral)
+        transport.disconnect()
     }
 
     public func collect(dataTypes: [DataType], dataTypesToStore: [DataType]) {
@@ -90,26 +143,16 @@ public class Device: NSObject {
                 send(buffer, processId: 0)
             }
 
-            if let characteristic = discoveredCharacteristics.first(where: { $0.uuid == BatteryLevelService.batteryLevelCharacteristic }) {
-                peripheral.setNotifyValue(true, for: characteristic)
-            }
-
         } else { /// Legacy
-            if let characteristic = discoveredCharacteristics.first(where: { $0.uuid == batteryCharacteristicUUID }) {
-                peripheral.setNotifyValue(true, for: characteristic)
-            }
-
-            for dataType in dataTypes {
-                if let characteristic = dataTypesUUID[dataType] {
-                    if let characteristic = discoveredCharacteristics.first(where: { $0.uuid == characteristic }) {
-                        peripheral.setNotifyValue(true, for: characteristic)
-                    }
-                }
-            }
+            startLegacyCollection(dataTypes: dataTypes)
         }
     }
 
     public func readRSSI() {
+        guard let peripheral else {
+            deviceDelegate?.didReceiveError(self, error: AidlabError(message: "RSSI not available for this transport"))
+            return
+        }
         peripheral.readRSSI()
     }
 
@@ -122,14 +165,17 @@ public class Device: NSObject {
     }
 
     public func setTime(_ timestamp: UInt32) {
-        guard let currentTimeCharacteristic = discoveredCharacteristics.first(where: { $0.uuid == CurrentTimeService.currentTimeCharacteristic })
-        else {
-            deviceDelegate?.didReceiveError(self, error: AidlabError(message: "Current time characteristic unavailable"))
-            return
-        }
-
         let payload = withUnsafeBytes(of: timestamp.littleEndian) { Data($0) }
-        peripheral.writeValue(payload, for: currentTimeCharacteristic, type: .withResponse)
+        transport.writeCharacteristic(
+            CurrentTimeService.currentTimeCharacteristic,
+            data: payload,
+            withResponse: true
+        ) { [weak self] result in
+            guard let self else { return }
+            if case let .failure(error) = result {
+                deviceDelegate?.didReceiveError(self, error: error)
+            }
+        }
     }
 
     public func send(_ bytes: [UInt8], processId: Int = 0) {
@@ -140,17 +186,9 @@ public class Device: NSObject {
 
     // -- Internal -------------------------------------------------------------
 
-    /// Array with CBUUID services for start notify
-    let notifyServices: [CBUUID] = [userServiceUUID, MotionService.uuid, HeartRateService.uuid, HealthThermometerService.uuid, BatteryLevelService.uuid]
-
-    /// Array with CBUUID services for read or write value
-    let readWriteServices: [CBUUID] = [DeviceInformationService.uuid, CurrentTimeService.uuid]
-
     // Avoid implicitly unwrapped optional; use optional and guard when needed
     var aidlabSDK: UnsafeMutableRawPointer?
     var deviceDelegate: DeviceDelegate?
-
-    var discoveredCharacteristics: [CBCharacteristic] = []
 
     var maxCmdPackageLength: Int = 20
 
@@ -158,24 +196,140 @@ public class Device: NSObject {
     var chunkQueue: [Data] = []
     var readyForNextChunk: Bool = true
 
+    private func startNotify(
+        uuid: CBUUID,
+        required: Bool,
+        onData: @escaping (Data) -> Void
+    ) {
+        activeNotificationUUIDs.insert(uuid)
+        transport.startNotifications(
+            uuid,
+            onData: onData,
+            onError: { [weak self] error in
+                guard let self else { return }
+                if required {
+                    deviceDelegate?.didReceiveError(self, error: error)
+                    transport.disconnect()
+                }
+            }
+        )
+    }
+
+    private func stopAllNotifications() {
+        for uuid in activeNotificationUUIDs {
+            transport.stopNotifications(uuid)
+        }
+        activeNotificationUUIDs.removeAll(keepingCapacity: false)
+    }
+
+    func onTransportConnected() {
+        readConnectionMetadata { [weak self] in
+            self?.didConnect()
+        }
+    }
+
+    func handleDisconnected(reason: DisconnectReason) {
+        if didHandleDisconnect {
+            return
+        }
+        didHandleDisconnect = true
+
+        var resolvedReason = reason
+        if !checkCompatibility() {
+            deviceDelegate?.didReceiveError(self, error: AidlabError(message: "Unsupported SDK"))
+            resolvedReason = .sdkOutdated
+        }
+
+        stopAllNotifications()
+        resetBleQueue()
+
+        if let aidlabSDK {
+            AidlabSDK_set_log_callback(nil, nil, aidlabSDK)
+            AidlabSDK_set_context(nil, aidlabSDK)
+            AidlabSDK_destroy(aidlabSDK)
+        }
+        aidlabSDK = nil
+
+        deviceDelegate?.didDisconnect(self, reason: resolvedReason)
+        deviceDelegate = nil
+        transport.onDisconnect = nil
+    }
+
+    private func readConnectionMetadata(completion: @escaping () -> Void) {
+        func readUtf8(_ uuid: CBUUID, completion: @escaping (String?) -> Void) {
+            transport.readCharacteristic(uuid) { result in
+                switch result {
+                case let .success(data):
+                    let value = String(bytes: data, encoding: .utf8)?
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                        .replacingOccurrences(of: "\0", with: "") ?? ""
+                    completion(value.isEmpty ? nil : value)
+                case .failure:
+                    completion(nil)
+                }
+            }
+        }
+
+        readUtf8(DeviceInformationService.manufacturerNameStringCharacteristic) { [weak self] value in
+            guard let self else { return }
+            manufacturerName = value
+            readUtf8(DeviceInformationService.serialNumberStringCharacteristic) { [weak self] value in
+                guard let self else { return }
+                serialNumber = value
+                readUtf8(DeviceInformationService.firmwareRevisionStringCharacteristic) { [weak self] value in
+                    guard let self else { return }
+                    firmwareRevision = value
+                    readUtf8(DeviceInformationService.hardwareRevisionStringCharacteristic) { [weak self] value in
+                        guard let self else { return }
+                        hardwareRevision = value
+
+                        guard serialNumber != nil, firmwareRevision != nil, hardwareRevision != nil else {
+                            deviceDelegate?.didReceiveError(self, error: AidlabError(message: "Failed to read device metadata"))
+                            transport.disconnect()
+                            return
+                        }
+
+                        completion()
+                    }
+                }
+            }
+        }
+    }
+
     /// Serial number, firmware, and hardware version are ready
-    func didConnect() {
+    private func didConnect() {
         if !checkCompatibility() {
             deviceDelegate?.didConnect(self)
             disconnect()
             return
         }
 
+        setTime(UInt32(Date().timeIntervalSince1970))
+
         createAidlabSDK()
 
         if supportsExtendedMtu() {
-            let negotiated = peripheral.maximumWriteValueLength(for: .withResponse)
-            let attSafe = negotiated > 3 ? negotiated - 3 : negotiated
-            maxCmdPackageLength = max(20, attSafe > 0 ? attSafe : 20)
+            let negotiated = transport.mtuSize
+            maxCmdPackageLength = max(20, negotiated > 0 ? negotiated : 20)
         } else {
             maxCmdPackageLength = 20
         }
-        setTime(UInt32(Date().timeIntervalSince1970))
+        startNotify(
+            uuid: cmdCharacteristicUUID,
+            required: true,
+            onData: { [weak self] data in
+                self?.processCommandChunk(data)
+            }
+        )
+        drainChunkQueue()
+
+        startNotify(
+            uuid: BatteryLevelService.batteryLevelCharacteristic,
+            required: false,
+            onData: { [weak self] data in
+                self?.processBatteryPacket(data)
+            }
+        )
 
         /// Users are notified about the connection after reading the firmware revision
         deviceDelegate?.didConnect(self)
@@ -270,10 +424,9 @@ public class Device: NSObject {
             return 20
         }
 
-        let negotiated = peripheral.maximumWriteValueLength(for: .withResponse)
-        let attSafe = negotiated > 3 ? negotiated - 3 : negotiated
-        if attSafe > 0 {
-            return min(maxCmdPackageLength, max(20, attSafe))
+        let negotiated = transport.mtuSize
+        if negotiated > 0 {
+            return min(maxCmdPackageLength, max(20, negotiated))
         }
         return 20
     }
@@ -300,16 +453,86 @@ public class Device: NSObject {
         return bytes
     }
 
+    private func startLegacyCollection(dataTypes: [DataType]) {
+        var uuids: Set<CBUUID> = [batteryCharacteristicUUID]
+        for dataType in dataTypes {
+            if let uuid = dataTypesUUID[dataType] {
+                uuids.insert(uuid)
+            }
+        }
+
+        for uuid in uuids {
+            startNotify(
+                uuid: uuid,
+                required: false,
+                onData: { [weak self] data in
+                    self?.processLegacyData(uuid: uuid, data: data)
+                }
+            )
+        }
+    }
+
+    private func processCommandChunk(_ data: Data) {
+        guard let aidlabSDK else { return }
+        var scratchVal = [UInt8](data)
+        AidlabSDK_process_ble_chunk(&scratchVal, Int32(scratchVal.count), aidlabSDK)
+    }
+
+    private func processBatteryPacket(_ data: Data) {
+        guard aidlabSDK != nil else { return }
+        var scratchVal = [UInt8](data)
+        AidlabSDK_process_battery_package(&scratchVal, Int32(scratchVal.count), aidlabSDK)
+    }
+
+    private func processLegacyData(
+        uuid: CBUUID,
+        data: Data
+    ) {
+        guard aidlabSDK != nil else { return }
+        var scratchVal = [UInt8](data)
+        let count = Int32(scratchVal.count)
+
+        switch uuid {
+        case temperatureCharacteristicUUID:
+            processTemperaturePackage(&scratchVal, count, aidlabSDK)
+        case ecgCharacteristicUUID:
+            processECGPackage(&scratchVal, count, aidlabSDK)
+        case respirationCharacteristicUUID:
+            processRespirationPackage(&scratchVal, count, aidlabSDK)
+        case motionCharacteristicUUID:
+            processMotionPackage(&scratchVal, count, aidlabSDK)
+        case soundVolumeCharacteristicUUID:
+            processSoundVolumePackage(&scratchVal, count, aidlabSDK)
+        case MotionService.stepsUUID:
+            processStepsPackage(&scratchVal, count, aidlabSDK)
+        case MotionService.activityUUID:
+            processActivityPackage(&scratchVal, count, aidlabSDK)
+        case MotionService.orientationUUID:
+            processOrientationPackage(&scratchVal, count, aidlabSDK)
+        case HeartRateService.heartRateMeasurementCharacteristic:
+            processHeartRatePackage(&scratchVal, count, aidlabSDK)
+        case BatteryLevelService.batteryLevelCharacteristic, batteryCharacteristicUUID:
+            AidlabSDK_process_battery_package(&scratchVal, count, aidlabSDK)
+        default:
+            break
+        }
+    }
+
     func drainChunkQueue() {
         guard readyForNextChunk else { return }
         guard !chunkQueue.isEmpty else { return }
 
-        // Command characteristic discovery may lag behind queue population; wait until it's ready.
-        guard let cmdCharacteristic = discoveredCharacteristics.first(where: { $0.uuid == cmdCharacteristicUUID }) else { return }
-
         let chunk = chunkQueue.removeFirst()
         readyForNextChunk = false
-        peripheral.writeValue(chunk, for: cmdCharacteristic, type: .withResponse)
+        transport.writeCharacteristic(cmdCharacteristicUUID, data: chunk, withResponse: true) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success:
+                handleCommandWriteResult(error: nil)
+            case let .failure(error):
+                handleCommandWriteResult(error: error)
+            }
+        }
     }
 
     func handleCommandWriteResult(error: Error?) {

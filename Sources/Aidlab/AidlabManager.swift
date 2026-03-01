@@ -6,7 +6,7 @@
 import CoreBluetooth
 import Foundation
 
-public enum DisconnectReason: Int {
+public enum DisconnectReason: Int, Sendable {
     case timeout = 0
     case deviceDisconnected = 1
     case appDisconnected = 2
@@ -61,23 +61,38 @@ public final class AidlabManager: NSObject, CBCentralManagerDelegate {
     }
 
     public func centralManager(_: CBCentralManager, didConnect peripheral: CBPeripheral) {
-        discoveredDevices[peripheral.identifier]?.onDidConnect()
+        discoveredDevices[peripheral.identifier]?.notifyDidConnect()
     }
 
     public func centralManager(_: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
-        discoveredDevices[peripheral.identifier]?.onFailToConnect(error: error)
+        discoveredDevices[peripheral.identifier]?.notifyDidFailToConnect(error: error)
     }
 
     public func centralManager(_: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
-        discoveredDevices[peripheral.identifier]?.onDisconnectPeripheral(timestamp: nil, isReconnecting: nil, error: error)
+        discoveredDevices[peripheral.identifier]?.notifyDidDisconnect(error: error)
     }
 
     public func centralManager(_: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, timestamp: CFAbsoluteTime, isReconnecting: Bool, error: Error?) {
-        discoveredDevices[peripheral.identifier]?.onDisconnectPeripheral(timestamp: timestamp, isReconnecting: isReconnecting, error: error)
+        discoveredDevices[peripheral.identifier]?.notifyDidDisconnect(timestamp: timestamp, isReconnecting: isReconnecting, error: error)
     }
 
     public func centralManager(_: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData _: [String: Any], rssi RSSI: NSNumber) {
-        let newDevice = Device(peripheral: peripheral, rssi: RSSI)
+        if let existingDevice = discoveredDevices[peripheral.identifier] {
+            existingDevice.rssi = RSSI
+            if existingDevice.name == nil {
+                existingDevice.name = peripheral.name
+            }
+            delegate?.didDiscover(existingDevice)
+            return
+        }
+
+        let transport =
+            CoreBluetoothAidlabTransport(
+                peripheral: peripheral,
+                rssi: RSSI,
+                centralManagerProvider: { AidlabManager.centralManager }
+            )
+        let newDevice = Device(transport: transport)
         discoveredDevices[peripheral.identifier] = newDevice
         delegate?.didDiscover(newDevice)
     }
@@ -99,7 +114,7 @@ public final class AidlabManager: NSObject, CBCentralManagerDelegate {
     }
 
     private var shouldScan: Bool
-    private var delegate: AidlabManagerDelegate?
+    private weak var delegate: AidlabManagerDelegate?
     private var scanMode: ScanMode = .lowPower
     private let servicesToScan: [CBUUID] = [HeartRateService.uuid]
 }
