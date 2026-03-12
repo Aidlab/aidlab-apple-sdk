@@ -591,7 +591,7 @@ public class Device: NSObject, @unchecked Sendable {
     private let didReceiveGyroscope: callbackGyroscope = { context, timestamp, gx, gy, gz in
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceiveGyroscope(self_, timestamp: timestamp, qx: gx, qy: gy, qz: gz)
+        self_.deviceDelegate?.didReceiveGyroscope(self_, timestamp: timestamp, gx: gx, gy: gy, gz: gz)
     }
 
     private let didReceiveMagnetometer: callbackMagnetometer = { context, timestamp, mx, my, mz in
@@ -658,7 +658,7 @@ public class Device: NSObject, @unchecked Sendable {
     private let wearStateDidChange: callbackWearState = { context, state in
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.wearStateDidChange(self_, state: WearState(wearState: state))
+        self_.deviceDelegate?.wearStateDidChange(self_, wearState: WearState(wearState: state))
     }
 
     private let didReceiveSoundVolume: callbackSoundVolume = { context, timestamp, soundVolume in
@@ -681,15 +681,15 @@ public class Device: NSObject, @unchecked Sendable {
 
     private let didDetect: callback_function = { context, exercise in
         guard let context else { return }
-        if exercise == AidlabSDK.none { return }
+        if exercise == AidlabSDK.exerciseNone { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didDetect(self_, exercise: Exercise(exercise: exercise))
+        self_.deviceDelegate?.didDetectExercise(self_, exercise: Exercise(exercise: exercise))
     }
 
     private let didDetectActivity: callbackActivity = { context, timestamp, activity in
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didDetect(self_, timestamp: timestamp, activity: ActivityType(activityType: activity))
+        self_.deviceDelegate?.didReceiveActivity(self_, timestamp: timestamp, activity: ActivityType(activityType: activity))
     }
 
     private let didReceivePayload: callbackPayload = { context, process, payload, payloadLength in
@@ -824,7 +824,7 @@ public class Device: NSObject, @unchecked Sendable {
     private let didReceivePastGyroscope: callbackGyroscope = { context, timestamp, gx, gy, gz in
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceivePastGyroscope(self_, timestamp: timestamp, qx: gx, qy: gy, qz: gz)
+        self_.deviceDelegate?.didReceivePastGyroscope(self_, timestamp: timestamp, gx: gx, gy: gy, gz: gz)
     }
 
     private let didReceivePastQuaternion: callbackQuaternion = { context, timestamp, qw, qx, qy, qz in

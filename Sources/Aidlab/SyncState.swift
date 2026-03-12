@@ -9,15 +9,15 @@ import Foundation
 public enum SyncState {
     init(syncState: AidlabSDK.SyncState) {
         switch syncState {
-        case AidlabSDK.start:
+        case AidlabSDK.syncStateStart:
             self = .start
-        case AidlabSDK.end:
+        case AidlabSDK.syncStateEnd:
             self = .end
-        case AidlabSDK.stop:
+        case AidlabSDK.syncStateStop:
             self = .stop
-        case AidlabSDK.empty:
+        case AidlabSDK.syncStateEmpty:
             self = .empty
-        case AidlabSDK.unavailable:
+        case AidlabSDK.syncStateUnavailable:
             self = .unavailable
         default:
             self = .unavailable

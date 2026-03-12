@@ -1,6 +1,6 @@
 //
 //  Created by Szymon Gesicki on 29.02.2020.
-//  Copyright © 2017-2025 Aidlab. All rights reserved.
+//  Copyright © 2017-2026 Aidlab. All rights reserved.
 //
 //  Aidlab C++ SDK facilitates the process of exchanging information and receiving events from Aidlab and Aidmed One.
 //  The SDK offers packet compression mechanisms, backward compatibility, filtration, and simple data analysis.
@@ -27,53 +27,59 @@ extern "C" {
 
 typedef enum {
 
-    placedProperly = 0,
-    placedUpsideDown = 1,
-    loose = 2,
-    detached = 3,
-    unknown = 4,
-    unsettled = 5
+    wearStatePlacedProperly = 0,
+    wearStatePlacedUpsideDown = 1,
+    wearStateLoose = 2,
+    wearStateDetached = 3,
+    wearStateUnknown = 4,
+    wearStateUnsettled = 5
 
 } WearState;
 
 typedef enum {
 
-    none = -1,
-    pushUp = 0,
-    jump = 1,
-    sitUp = 2,
-    burpee = 3,
-    pullUp = 4,
-    squat = 5,
-    plankStart = 6,
-    plankEnd = 7
+    exerciseNone = -1,
+    exercisePushUp = 0,
+    exerciseJump = 1,
+    exerciseSitUp = 2,
+    exerciseBurpee = 3,
+    exercisePullUp = 4,
+    exerciseSquat = 5,
+    exercisePlankStart = 6,
+    exercisePlankEnd = 7
 
 } Exercise;
 
 typedef enum {
 
-    unspecific = 0,
-    automotive = 1,
-    walking = 2,
-    running = 4,
-    cycling = 8,
-    still = 16
+    activityTypeUnknown = 0,
+    activityTypeAutomotive = 1,
+    activityTypeWalking = 2,
+    activityTypeRunning = 4,
+    activityTypeCycling = 8,
+    activityTypeStill = 16
 
 } ActivityType;
 
 typedef enum {
 
-    start = 0,
-    end = 1,
-    stop = 2,
-    empty = 3,
-    unavailable = 4,
+    syncStateStart = 0,
+    syncStateEnd = 1,
+    syncStateStop = 2,
+    syncStateEmpty = 3,
+    syncStateUnavailable = 4,
 
 } SyncState;
 
 typedef enum { LogLevel_DEBUG = 0, LogLevel_INFO = 1, LogLevel_WARN = 2, LogLevel_ERROR = 3 } LogLevel;
 
-typedef enum { undefined = 0, prone = 1, supine = 2, leftSide = 3, rightSide = 4 } BodyPosition;
+typedef enum {
+    bodyPositionUnknown = 0,
+    bodyPositionProne = 1,
+    bodyPositionSupine = 2,
+    bodyPositionLeftSide = 3,
+    bodyPositionRightSide = 4
+} BodyPosition;
 
 typedef void (*callbackSampleTime)(void*, uint64_t, float);
 typedef void (*callbackActivity)(void*, uint64_t, ActivityType);

@@ -9,23 +9,23 @@ import Foundation
 public enum Exercise: Int {
     init(exercise: AidlabSDK.Exercise) {
         switch exercise {
-        case AidlabSDK.none:
+        case AidlabSDK.exerciseNone:
             self = .none
-        case AidlabSDK.pushUp:
+        case AidlabSDK.exercisePushUp:
             self = .pushUp
-        case AidlabSDK.jump:
+        case AidlabSDK.exerciseJump:
             self = .jump
-        case AidlabSDK.sitUp:
+        case AidlabSDK.exerciseSitUp:
             self = .sitUp
-        case AidlabSDK.burpee:
+        case AidlabSDK.exerciseBurpee:
             self = .burpee
-        case AidlabSDK.pullUp:
+        case AidlabSDK.exercisePullUp:
             self = .pullUp
-        case AidlabSDK.squat:
+        case AidlabSDK.exerciseSquat:
             self = .squat
-        case AidlabSDK.plankStart:
+        case AidlabSDK.exercisePlankStart:
             self = .plankStart
-        case AidlabSDK.plankEnd:
+        case AidlabSDK.exercisePlankEnd:
             self = .plankEnd
         default:
             self = .none

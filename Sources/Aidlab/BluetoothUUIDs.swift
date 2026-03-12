@@ -67,6 +67,6 @@ var dataTypesUUID: [DataType: CBUUID] {
         DataType.skinTemperature: temperatureCharacteristicUUID,
         DataType.motion: motionCharacteristicUUID,
         DataType.ecg: ecgCharacteristicUUID,
-        DataType.respiration: respirationCharacteristicUUID,
+        DataType.respiration: respirationCharacteristicUUID
     ]
 }

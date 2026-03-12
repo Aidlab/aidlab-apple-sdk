@@ -9,24 +9,24 @@ import Foundation
 public enum ActivityType {
     init(activityType: AidlabSDK.ActivityType) {
         switch activityType {
-        case AidlabSDK.unspecific:
-            self = .unspecific
-        case AidlabSDK.automotive:
+        case AidlabSDK.activityTypeUnknown:
+            self = .unknown
+        case AidlabSDK.activityTypeAutomotive:
             self = .automotive
-        case AidlabSDK.walking:
+        case AidlabSDK.activityTypeWalking:
             self = .walking
-        case AidlabSDK.running:
+        case AidlabSDK.activityTypeRunning:
             self = .running
-        case AidlabSDK.cycling:
+        case AidlabSDK.activityTypeCycling:
             self = .cycling
-        case AidlabSDK.still:
+        case AidlabSDK.activityTypeStill:
             self = .still
         default:
-            self = .unspecific
+            self = .unknown
         }
     }
 
-    case unspecific
+    case unknown
     case automotive
     case walking
     case running

@@ -9,22 +9,22 @@ import Foundation
 public enum BodyPosition {
     init(bodyPosition: AidlabSDK.BodyPosition) {
         switch bodyPosition {
-        case AidlabSDK.undefined:
-            self = .undefined
-        case AidlabSDK.prone:
+        case AidlabSDK.bodyPositionUnknown:
+            self = .unknown
+        case AidlabSDK.bodyPositionProne:
             self = .prone
-        case AidlabSDK.supine:
+        case AidlabSDK.bodyPositionSupine:
             self = .supine
-        case AidlabSDK.leftSide:
+        case AidlabSDK.bodyPositionLeftSide:
             self = .leftSide
-        case AidlabSDK.rightSide:
+        case AidlabSDK.bodyPositionRightSide:
             self = .rightSide
         default:
-            self = .undefined
+            self = .unknown
         }
     }
 
-    case undefined
+    case unknown
     case prone
     case supine
     case leftSide

@@ -20,7 +20,7 @@ public protocol DeviceDelegate: AnyObject {
 
     func didReceiveAccelerometer(_ device: Device, timestamp: UInt64, ax: Float, ay: Float, az: Float)
 
-    func didReceiveGyroscope(_ device: Device, timestamp: UInt64, qx: Float, qy: Float, qz: Float)
+    func didReceiveGyroscope(_ device: Device, timestamp: UInt64, gx: Float, gy: Float, gz: Float)
 
     func didReceiveMagnetometer(_ device: Device, timestamp: UInt64, mx: Float, my: Float, mz: Float)
 
@@ -44,9 +44,9 @@ public protocol DeviceDelegate: AnyObject {
 
     func didReceiveSoundVolume(_ device: Device, timestamp: UInt64, soundVolume: UInt16)
 
-    func didDetect(_ device: Device, exercise: Exercise)
+    func didDetectExercise(_ device: Device, exercise: Exercise)
 
-    func didDetect(_ device: Device, timestamp: UInt64, activity: ActivityType)
+    func didReceiveActivity(_ device: Device, timestamp: UInt64, activity: ActivityType)
 
     func didDisconnect(_ device: Device, reason: DisconnectReason)
 
@@ -61,7 +61,7 @@ public protocol DeviceDelegate: AnyObject {
      * display short user guide how to wear Aidlab in your app.
      * @param  wearState    Current wear state.
      */
-    func wearStateDidChange(_ device: Device, state: WearState)
+    func wearStateDidChange(_ device: Device, wearState: WearState)
 
     /// Called when a payload was received from a process (raw bytes).
     /// - Parameters:
@@ -99,7 +99,7 @@ public protocol DeviceDelegate: AnyObject {
 
     func didReceivePastAccelerometer(_ device: Device, timestamp: UInt64, ax: Float, ay: Float, az: Float)
 
-    func didReceivePastGyroscope(_ device: Device, timestamp: UInt64, qx: Float, qy: Float, qz: Float)
+    func didReceivePastGyroscope(_ device: Device, timestamp: UInt64, gx: Float, gy: Float, gz: Float)
 
     func didReceivePastMagnetometer(_ device: Device, timestamp: UInt64, mx: Float, my: Float, mz: Float)
 

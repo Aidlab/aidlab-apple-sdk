@@ -9,17 +9,17 @@ import Foundation
 public enum WearState {
     init(wearState: AidlabSDK.WearState) {
         switch wearState {
-        case AidlabSDK.placedProperly:
+        case AidlabSDK.wearStatePlacedProperly:
             self = .placedProperly
-        case AidlabSDK.placedUpsideDown:
+        case AidlabSDK.wearStatePlacedUpsideDown:
             self = .placedUpsideDown
-        case AidlabSDK.loose:
+        case AidlabSDK.wearStateLoose:
             self = .loose
-        case AidlabSDK.detached:
+        case AidlabSDK.wearStateDetached:
             self = .detached
-        case AidlabSDK.unknown:
+        case AidlabSDK.wearStateUnknown:
             self = .unknown
-        case AidlabSDK.unsettled:
+        case AidlabSDK.wearStateUnsettled:
             self = .unsettled
         default:
             self = .unknown
