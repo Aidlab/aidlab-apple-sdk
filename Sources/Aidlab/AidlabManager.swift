@@ -21,6 +21,7 @@ public enum ScanMode: Int {
 
 public final class AidlabManager: NSObject, CBCentralManagerDelegate {
     public var legacyAutoPair: Bool = true
+    public private(set) var bluetoothState: BluetoothState = .unknown
 
     public init(delegate: AidlabManagerDelegate) {
         self.delegate = delegate
@@ -40,6 +41,7 @@ public final class AidlabManager: NSObject, CBCentralManagerDelegate {
         shouldScan = true
 
         guard let centralManager = AidlabManager.centralManager else { return }
+        updateBluetoothState(from: centralManager)
         if !isPowerOn(central: centralManager) { return }
 
         centralManager.stopScan()
@@ -53,9 +55,8 @@ public final class AidlabManager: NSObject, CBCentralManagerDelegate {
     }
 
     public func centralManagerDidUpdateState(_ central: CBCentralManager) {
-        if central.state == .poweredOff {
-            // Nothing to do
-        } else if shouldScan {
+        updateBluetoothState(from: central)
+        if shouldScan && isPowerOn(central: central) {
             scan(scanMode: scanMode)
         }
     }
@@ -104,6 +105,29 @@ public final class AidlabManager: NSObject, CBCentralManagerDelegate {
     // -- Private --------------------------------------------------------------
 
     private var discoveredDevices: [UUID: Device] = [:]
+
+    private func updateBluetoothState(from central: CBCentralManager) {
+        switch central.state {
+        case .poweredOn:
+            setBluetoothState(.ready)
+        case .poweredOff:
+            setBluetoothState(.poweredOff)
+        case .unsupported:
+            setBluetoothState(.unsupported)
+        case .unauthorized:
+            setBluetoothState(.unauthorized)
+        case .unknown, .resetting:
+            setBluetoothState(.unknown)
+        @unknown default:
+            setBluetoothState(.unknown)
+        }
+    }
+
+    private func setBluetoothState(_ state: BluetoothState) {
+        guard bluetoothState != state else { return }
+        bluetoothState = state
+        delegate?.didUpdateBluetoothState(state)
+    }
 
     private func isPowerOn(central: CBCentralManager) -> Bool {
         if #available(iOS 10.0, *) {

@@ -8,4 +8,9 @@ import Foundation
 
 public protocol AidlabManagerDelegate: AnyObject {
     func didDiscover(_ device: Device)
+    func didUpdateBluetoothState(_ state: BluetoothState)
+}
+
+public extension AidlabManagerDelegate {
+    func didUpdateBluetoothState(_: BluetoothState) {}
 }
