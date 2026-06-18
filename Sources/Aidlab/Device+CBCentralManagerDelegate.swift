@@ -12,7 +12,7 @@ extension Device {
             forwarding.notifyDidFailToConnect(error: error)
             return
         }
-        let resolvedError = error ?? AidlabError(message: "Fail to connect")
+        let resolvedError = error.map(AidlabError.wrapping) ?? AidlabError(message: "Fail to connect")
         deviceDelegate?.didReceiveError(self, error: resolvedError)
     }
 

@@ -140,5 +140,5 @@ public final class AidlabManager: NSObject, CBCentralManagerDelegate {
     private var shouldScan: Bool
     private weak var delegate: AidlabManagerDelegate?
     private var scanMode: ScanMode = .lowPower
-    private let servicesToScan: [CBUUID] = [HeartRateService.uuid]
+    private let servicesToScan: [CBUUID] = [userServiceUUID, HeartRateService.uuid]
 }

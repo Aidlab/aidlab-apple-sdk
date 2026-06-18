@@ -71,7 +71,12 @@ typedef enum {
 
 } SyncState;
 
-typedef enum { LogLevel_DEBUG = 0, LogLevel_INFO = 1, LogLevel_WARN = 2, LogLevel_ERROR = 3 } LogLevel;
+typedef enum {
+    AIDLAB_ERROR_NONE = 0,
+    AIDLAB_ERROR_TRANSPORT = 1000,
+    AIDLAB_ERROR_PROTOCOL = 2000,
+    AIDLAB_ERROR_SDK = 9000
+} AidlabErrorCode;
 
 typedef enum {
     bodyPositionUnknown = 0,
@@ -124,9 +129,9 @@ typedef void (*callbackBLEReady)(void* context);
 /// Process parameter indicates which device process originated the payload.
 typedef void (*callbackPayload)(void* context, const char* process, const uint8_t* payload, size_t payload_length);
 
-/// @brief Callback function type for receiving log messages from the Aidlab SDK.
-/// This callback provides structured logging with proper level classification.
-typedef void (*callbackLogMessage)(void* context, LogLevel level, const char* message);
+/// @brief Callback function type for receiving typed SDK errors.
+/// Code is the public contract. Message is diagnostic-only and must not be parsed by consumers.
+typedef void (*callbackError)(void* context, AidlabErrorCode code, const char* message);
 
 /// @brief Initializes BLE communication callback for sending data to device.
 /// SDK returns complete payloads ready for transmission - platform is responsible for MTU chunking.
@@ -134,7 +139,7 @@ typedef void (*callbackLogMessage)(void* context, LogLevel level, const char* me
 /// @param bleSend Callback function for sending complete payloads to device
 /// @param aidlabSDK Pointer to the Aidlab SDK instance
 /// @note Platform must handle MTU-based chunking of returned payloads
-/// @note BLE errors are reported through the unified callbackLogMessage system
+/// @note BLE errors are reported through AidlabSDK_set_error_callback.
 SHARED_EXPORT void AidlabSDK_set_ble_send_callback(callbackBLESend bleSend, void* aidlabSDK);
 
 /// @brief Registers BLE ready callback that notifies when it is safe to transmit the next payload.
@@ -197,13 +202,10 @@ SHARED_EXPORT void AidlabSDK_set_context(void* context, void* aidlabSDK);
 
 SHARED_EXPORT void AidlabSDK_set_payload_callback(callbackPayload callback, void* aidlabSDK);
 
-/// @brief Sets the structured logging callback for the Aidlab SDK.
-/// This callback receives log messages with proper level classification.
-///
-/// @param callback Pointer to the log message callback function.
-/// @param context Pointer to the context object for the callback.
-/// @param aidlabSDK Pointer to the Aidlab SDK instance.
-SHARED_EXPORT void AidlabSDK_set_log_callback(callbackLogMessage callback, void* context, void* aidlabSDK);
+/// @brief Sets the typed SDK error callback.
+/// TRANSPORT and PROTOCOL errors indicate that the current communication session is unreliable.
+/// Consumers should reset the connection/session before retrying application-level commands.
+SHARED_EXPORT void AidlabSDK_set_error_callback(callbackError callback, void* context, void* aidlabSDK);
 
 SHARED_EXPORT void AidlabSDK_set_eda_callback(callbackEda eda, void* aidlabSDK);
 SHARED_EXPORT void AidlabSDK_set_gps_callback(callbackGps gps, void* aidlabSDK);

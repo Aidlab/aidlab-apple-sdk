@@ -52,7 +52,7 @@ public protocol DeviceDelegate: AnyObject {
 
     func didConnect(_ device: Device)
 
-    func didReceiveError(_ device: Device, error: Error)
+    func didReceiveError(_ device: Device, error: AidlabError)
 
     func didUpdateRSSI(_ device: Device, rssi: Int32)
     /**

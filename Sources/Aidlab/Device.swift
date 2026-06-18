@@ -71,7 +71,7 @@ public class Device: NSObject, @unchecked Sendable {
         transport.onDisconnect = { [weak self] reason, error in
             guard let self else { return }
             if let error {
-                deviceDelegate?.didReceiveError(self, error: error)
+                deviceDelegate?.didReceiveError(self, error: AidlabError.wrapping(error))
             }
             handleDisconnected(reason: reason)
         }
@@ -82,7 +82,7 @@ public class Device: NSObject, @unchecked Sendable {
             case .success:
                 onTransportConnected()
             case let .failure(error):
-                deviceDelegate?.didReceiveError(self, error: error)
+                deviceDelegate?.didReceiveError(self, error: AidlabError.wrapping(error))
             }
         }
     }
@@ -173,7 +173,7 @@ public class Device: NSObject, @unchecked Sendable {
         ) { [weak self] result in
             guard let self else { return }
             if case let .failure(error) = result {
-                deviceDelegate?.didReceiveError(self, error: error)
+                deviceDelegate?.didReceiveError(self, error: AidlabError.wrapping(error))
             }
         }
     }
@@ -208,7 +208,7 @@ public class Device: NSObject, @unchecked Sendable {
             onError: { [weak self] error in
                 guard let self else { return }
                 if required {
-                    deviceDelegate?.didReceiveError(self, error: error)
+                    deviceDelegate?.didReceiveError(self, error: AidlabError.wrapping(error))
                     transport.disconnect()
                 }
             }
@@ -244,7 +244,7 @@ public class Device: NSObject, @unchecked Sendable {
         resetBleQueue()
 
         if let aidlabSDK {
-            AidlabSDK_set_log_callback(nil, nil, aidlabSDK)
+            AidlabSDK_set_error_callback(nil, nil, aidlabSDK)
             AidlabSDK_set_context(nil, aidlabSDK)
             AidlabSDK_destroy(aidlabSDK)
         }
@@ -352,7 +352,7 @@ public class Device: NSObject, @unchecked Sendable {
 
         let context = Unmanaged.passUnretained(self).toOpaque()
         AidlabSDK_set_context(context, aidlabSDK)
-        AidlabSDK_set_log_callback(didReceiveLogMessage, context, aidlabSDK)
+        AidlabSDK_set_error_callback(didReceiveError, context, aidlabSDK)
 
         AidlabSDK_set_ble_send_callback(bleSendCallback, aidlabSDK)
         AidlabSDK_set_ble_ready_callback(bleReadyCallback, aidlabSDK)
@@ -538,7 +538,7 @@ public class Device: NSObject, @unchecked Sendable {
     func handleCommandWriteResult(error: Error?) {
         if let error {
             resetBleQueue()
-            deviceDelegate?.didReceiveError(self, error: error)
+            deviceDelegate?.didReceiveError(self, error: AidlabError.wrapping(error))
             return
         }
 
@@ -713,7 +713,7 @@ public class Device: NSObject, @unchecked Sendable {
         self_.deviceDelegate?.didDetectUserEvent(self_, timestamp: timestamp)
     }
 
-    private let didReceiveLogMessage: callbackLogMessage = { context, level, text in
+    private let didReceiveError: callbackError = { context, code, text in
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
 
@@ -721,8 +721,10 @@ public class Device: NSObject, @unchecked Sendable {
               let string = String(validatingCString: cStringPointer)
         else { return }
 
-        if level.rawValue == 3 { self_.deviceDelegate?.didReceiveError(self_, error: AidlabError(message: string))
-        }
+        self_.deviceDelegate?.didReceiveError(
+            self_,
+            error: AidlabError.fromCore(rawCode: Int32(code.rawValue), message: string)
+        )
     }
 
     private let didReceiveSignalQuality: callbackSignalQuality = { context, timestamp, value in
