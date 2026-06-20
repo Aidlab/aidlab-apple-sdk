@@ -8,7 +8,7 @@ Add the SDK via Swift Package Manager using: `https://github.com/Aidlab/aidlab-a
 
 ## Documentation
 
-For detailed guidance, visit [Aidlab Developer Docs](https://www.aidlab.com/developer/docs/ios.html).
+For detailed guidance, visit [Aidlab Developer Docs](https://www.aidlab.com/developer/docs/installation/ios).
 
 ## Reporting Issues
 
