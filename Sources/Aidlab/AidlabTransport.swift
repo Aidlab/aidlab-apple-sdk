@@ -5,6 +5,8 @@ public protocol AidlabTransport: AnyObject {
     var address: UUID { get }
     var name: String? { get }
     var rssi: NSNumber { get set }
+
+    /// Negotiated ATT MTU minus its 3-byte header, capped at 512 bytes.
     var mtuSize: Int { get }
 
     /// Called when the transport disconnects (including failures) after `connect`.

@@ -7,7 +7,7 @@ final class CoreBluetoothAidlabTransport: NSObject, AidlabTransport, CoreBluetoo
     let peripheral: CBPeripheral
     var address: UUID { peripheral.identifier }
     var name: String? { peripheral.name }
-    var mtuSize: Int { peripheral.maximumWriteValueLength(for: .withResponse) }
+    var mtuSize: Int { peripheral.maximumWriteValueLength(for: .withoutResponse) }
 
     var onRSSIRead: (@Sendable (NSNumber) -> Void)?
 
@@ -20,6 +20,12 @@ final class CoreBluetoothAidlabTransport: NSObject, AidlabTransport, CoreBluetoo
         let onError: (Error) -> Void
     }
 
+    private struct PendingWithoutResponseWrite {
+        let characteristic: CBCharacteristic
+        let data: Data
+        let completion: (Result<Void, Error>) -> Void
+    }
+
     private var connectCompletion: ((Result<Void, Error>) -> Void)?
     private var manualDisconnectRequested = false
     private var didEmitDisconnect = false
@@ -30,6 +36,7 @@ final class CoreBluetoothAidlabTransport: NSObject, AidlabTransport, CoreBluetoo
 
     private var readCompletionsByUuid: [CBUUID: [(Result<Data, Error>) -> Void]] = [:]
     private var writeCompletionsByUuid: [CBUUID: [(Result<Void, Error>) -> Void]] = [:]
+    private var pendingWithoutResponseWrites: [PendingWithoutResponseWrite] = []
 
     private var notifyByUuid: [CBUUID: NotifyHandler] = [:]
 
@@ -104,8 +111,23 @@ final class CoreBluetoothAidlabTransport: NSObject, AidlabTransport, CoreBluetoo
         }
 
         if !withResponse {
-            peripheral.writeValue(data, for: characteristic, type: .withoutResponse)
-            completion(.success(()))
+            guard characteristic.properties.contains(.writeWithoutResponse) else {
+                completion(.failure(AidlabError(message: "Characteristic \(uuid.uuidString) does not support writes without response")))
+                return
+            }
+            pendingWithoutResponseWrites.append(
+                PendingWithoutResponseWrite(
+                    characteristic: characteristic,
+                    data: data,
+                    completion: completion
+                )
+            )
+            drainWithoutResponseWrites()
+            return
+        }
+
+        guard characteristic.properties.contains(.write) else {
+            completion(.failure(AidlabError(message: "Characteristic \(uuid.uuidString) is not writable")))
             return
         }
 
@@ -185,6 +207,12 @@ final class CoreBluetoothAidlabTransport: NSObject, AidlabTransport, CoreBluetoo
         }
         writeCompletionsByUuid.removeAll(keepingCapacity: false)
 
+        let pendingWrites = pendingWithoutResponseWrites
+        pendingWithoutResponseWrites.removeAll(keepingCapacity: false)
+        for pendingWrite in pendingWrites {
+            pendingWrite.completion(.failure(disconnectedError))
+        }
+
         for (_, handler) in notifyByUuid {
             handler.onError(disconnectedError)
         }
@@ -197,6 +225,20 @@ final class CoreBluetoothAidlabTransport: NSObject, AidlabTransport, CoreBluetoo
         characteristicsByUuid.removeAll(keepingCapacity: false)
         pendingServicesCount = 0
         didReportConnected = false
+    }
+
+    private func drainWithoutResponseWrites() {
+        guard peripheral.canSendWriteWithoutResponse, !pendingWithoutResponseWrites.isEmpty else {
+            return
+        }
+
+        let pendingWrite = pendingWithoutResponseWrites.removeFirst()
+        peripheral.writeValue(
+            pendingWrite.data,
+            for: pendingWrite.characteristic,
+            type: .withoutResponse
+        )
+        pendingWrite.completion(.success(()))
     }
 
     private func mapDisconnectReason(error: Error?) -> DisconnectReason {
@@ -310,6 +352,10 @@ final class CoreBluetoothAidlabTransport: NSObject, AidlabTransport, CoreBluetoo
         } else {
             completion(.success(()))
         }
+    }
+
+    func peripheralIsReady(toSendWriteWithoutResponse _: CBPeripheral) {
+        drainWithoutResponseWrites()
     }
 
     func peripheral(_: CBPeripheral, didReadRSSI RSSI: NSNumber, error: Error?) {

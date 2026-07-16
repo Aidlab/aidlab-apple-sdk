@@ -68,7 +68,14 @@ public protocol DeviceDelegate: AnyObject {
     ///   - device: The Aidlab device instance
     ///   - process: The process name that sent the payload (e.g., "ping", "sync", "system")
     ///   - payload: Raw payload data as Data
-    func didReceivePayload(_ device: Device, process: String, payload: Data)
+    ///   - options: Process-specific metadata. Built-in metadata uses dedicated SDK callbacks.
+    func didReceivePayload(_ device: Device, process: String, payload: Data, options: UInt64)
+
+    /// Called with stderr emitted by a device process. Aidlab 1 does not emit this callback.
+    func didReceiveProcessError(_ device: Device, process: String, pid: UInt16, payload: Data, options: UInt64)
+
+    /// Called after the device reports that a runtime process has terminated.
+    func processDidTerminate(_ device: Device, pid: UInt16)
 
     func didDetectUserEvent(_ device: Device, timestamp: UInt64)
 
@@ -124,4 +131,9 @@ public protocol DeviceDelegate: AnyObject {
     func pressureWearStateDidChange(_ device: Device, wearState: WearState)
 
     func didReceivePressure(_ device: Device, timestamp: UInt64, value: Int32)
+}
+
+public extension DeviceDelegate {
+    func processDidTerminate(_: Device, pid _: UInt16) {}
+    func didReceiveProcessError(_: Device, process _: String, pid _: UInt16, payload _: Data, options _: UInt64) {}
 }

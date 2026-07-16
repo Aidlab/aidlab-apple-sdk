@@ -116,29 +116,37 @@ typedef void (*callback_function)(void*, Exercise);
 ////////////////////////////////
 
 /// @brief Callback function type for sending complete payloads to the device.
-/// SDK returns full payloads with protocol headers - platform must chunk to MTU size.
-/// Implementation should split payload into MTU-sized chunks and write to BLE command characteristic.
+/// SDK returns full payloads with protocol headers. The platform must split each frame into sequential GATT writes
+/// no larger than min(negotiated ATT MTU - 3, 512) and write them to the BLE command characteristic.
 typedef void (*callbackBLESend)(void* context, const uint8_t* data, int size);
 
 /// @brief Callback invoked when BLE transport is ready to accept the next payload.
-/// Legacy protocols (V1–V3.1) trigger it immediately after framing, V4 triggers it after ACK (when enabled).
+/// The public send API requests ACK/NAK for V4 frames, and this callback fires after that transaction resolves.
+/// Legacy protocols do not have a protocol-level ready callback; their platform writes use GATT write responses.
 typedef void (*callbackBLEReady)(void* context);
 
 /// @brief Callback function type for receiving payloads from the device.
 /// This callback delivers the raw payload data after transport protocol headers are stripped.
 /// Process parameter indicates which device process originated the payload.
-typedef void (*callbackPayload)(void* context, const char* process, const uint8_t* payload, size_t payload_length);
+/// Options contains process-specific metadata. Built-in metadata is exposed through dedicated SDK callbacks.
+typedef void (*callbackPayload)(void* context, const char* process, const uint8_t* payload, size_t payload_length,
+                                uint64_t options);
+
+/// @brief Callback invoked for stderr emitted by a device process.
+/// PID identifies the runtime process instance. Payload is raw process output and is not necessarily NUL-terminated.
+typedef void (*callbackProcessError)(void* context, const char* process, uint16_t pid, const uint8_t* payload,
+                                     size_t payload_length, uint64_t options);
 
 /// @brief Callback function type for receiving typed SDK errors.
 /// Code is the public contract. Message is diagnostic-only and must not be parsed by consumers.
 typedef void (*callbackError)(void* context, AidlabErrorCode code, const char* message);
 
 /// @brief Initializes BLE communication callback for sending data to device.
-/// SDK returns complete payloads ready for transmission - platform is responsible for MTU chunking.
+/// SDK returns complete payloads ready for transmission; platform is responsible for legal ATT chunking.
 ///
 /// @param bleSend Callback function for sending complete payloads to device
 /// @param aidlabSDK Pointer to the Aidlab SDK instance
-/// @note Platform must handle MTU-based chunking of returned payloads
+/// @note Each GATT write must be no larger than min(negotiated ATT MTU - 3, 512).
 /// @note BLE errors are reported through AidlabSDK_set_error_callback.
 SHARED_EXPORT void AidlabSDK_set_ble_send_callback(callbackBLESend bleSend, void* aidlabSDK);
 
@@ -149,14 +157,19 @@ SHARED_EXPORT void AidlabSDK_set_ble_send_callback(callbackBLESend bleSend, void
 SHARED_EXPORT void AidlabSDK_set_ble_ready_callback(callbackBLEReady bleReady, void* aidlabSDK);
 
 /// @brief Automatically detects protocol version and processes chunk accordingly:
-/// - V1: Direct sensor data processing (no headers)
-/// - V2/V3: Legacy header parsing and packet assembly
+/// - V1-V3: Legacy header parsing and packet assembly
 /// - V4: Modern protocol with compression and CRC validation
 ///
 /// @param data Pointer to the received BLE chunk data
 /// @param size Size of the received chunk in bytes
 /// @param aidlabSDK Pointer to the Aidlab SDK instance
 SHARED_EXPORT void AidlabSDK_process_ble_chunk(const uint8_t* data, int size, void* aidlabSDK);
+
+/// @brief Reports that the host platform failed to write the last SDK-produced BLE frame locally.
+///
+/// Use this only when the platform can prove that no byte of the frame reached the peer. If a fragmented frame may
+/// have been partially written, discard queued writes and disconnect so both endpoints reset their session state.
+SHARED_EXPORT void AidlabSDK_notify_ble_send_failure(void* aidlabSDK);
 
 /// Creates a new instance of Aidlab SDK.
 /// Each device should have a unique instance of AidlabSDK.
@@ -202,6 +215,8 @@ SHARED_EXPORT void AidlabSDK_set_context(void* context, void* aidlabSDK);
 
 SHARED_EXPORT void AidlabSDK_set_payload_callback(callbackPayload callback, void* aidlabSDK);
 
+SHARED_EXPORT void AidlabSDK_set_process_error_callback(callbackProcessError callback, void* aidlabSDK);
+
 /// @brief Sets the typed SDK error callback.
 /// TRANSPORT and PROTOCOL errors indicate that the current communication session is unreliable.
 /// Consumers should reset the connection/session before retrying application-level commands.
@@ -212,18 +227,25 @@ SHARED_EXPORT void AidlabSDK_set_gps_callback(callbackGps gps, void* aidlabSDK);
 SHARED_EXPORT void AidlabSDK_set_past_eda_callback(callbackEda eda, void* aidlabSDK);
 SHARED_EXPORT void AidlabSDK_set_past_gps_callback(callbackGps gps, void* aidlabSDK);
 
-/// @brief Sends payload to device.
+/// @brief Sends payload to device. The public V4 send path requests transport ACK/NAK for every frame.
+/// Legacy Aidlab 1 transports (V1-V3) do not support protocol ACK/NAK; platform integrations must use GATT writes
+/// with response for their fixed 20-byte command chunks.
 /// SDK adds protocol headers and returns complete payload via callbackBLESend.
-/// Platform is responsible for chunking the payload to fit MTU size.
+/// Platform is responsible for chunking the payload to the legal ATT value length.
 ///
 /// @param payload Pointer to the payload data to send (without protocol headers)
 /// @param size Size of the payload buffer in bytes
-/// @param process_id Process identifier for routing
+/// @param destination_pid Runtime destination PID for routing; use 0 for shell/system commands
 /// @param aidlabSDK Pointer to the Aidlab SDK instance
 /// @note Requires callbackBLESend to be set via AidlabSDK_set_ble_send_callback()
-/// @note Platform must chunk returned payload according to negotiated MTU
+/// @note Each GATT write must be no larger than min(negotiated ATT MTU - 3, 512).
 /// @note SDK handles protocol framing - do not add headers manually
-SHARED_EXPORT void AidlabSDK_send(const uint8_t* payload, int size, int process_id, void* aidlabSDK);
+SHARED_EXPORT void AidlabSDK_send(const uint8_t* payload, int size, int destination_pid, void* aidlabSDK);
+
+/// @internal Platform bridge for high-level process control methods. Public raw send APIs use AidlabSDK_send().
+/// Preserves the legacy command/data header distinction when routing a control command to an active process PID.
+SHARED_EXPORT void AidlabSDK_send_process_command(const uint8_t* payload, int size, int destination_pid,
+                                                  void* aidlabSDK);
 
 ////////////////////////////////
 /// Legacy (<FW 3.6 methods) ///

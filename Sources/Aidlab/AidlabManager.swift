@@ -56,7 +56,7 @@ public final class AidlabManager: NSObject, CBCentralManagerDelegate {
 
     public func centralManagerDidUpdateState(_ central: CBCentralManager) {
         updateBluetoothState(from: central)
-        if shouldScan && isPowerOn(central: central) {
+        if shouldScan, isPowerOn(central: central) {
             scan(scanMode: scanMode)
         }
     }

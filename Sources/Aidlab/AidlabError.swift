@@ -35,7 +35,7 @@ public final class AidlabError: NSObject, LocalizedError {
         AidlabError(code: Code(rawValue: rawCode) ?? .sdk, message: message)
     }
 
-    public override var description: String {
+    override public var description: String {
         "AidlabError(code: \(code), message: \(message))"
     }
 
