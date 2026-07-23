@@ -19,7 +19,3 @@ disabled_rules:
   - cyclomatic_complexity
   - function_body_length
   - file_length
-
-identifier_name:
-  min_length: 2
-  excluded: [id, i, j, x, y]

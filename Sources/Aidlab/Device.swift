@@ -924,8 +924,7 @@ public class Device: NSObject, @unchecked Sendable {
         updateActiveProcessPids(result)
         let terminationWaiter = pendingProcessTermination
         if result.status == Device.systemCreateSuccess || result.status == Device.systemCreateFailure,
-           let waiter = pendingProcessCommand
-        {
+           let waiter = pendingProcessCommand {
             if waiter.response == nil {
                 waiter.response = result
                 if !result.accepted || waiter.spawnedProcessId == nil {
@@ -1264,8 +1263,7 @@ public class Device: NSObject, @unchecked Sendable {
         self_.deviceDelegate?.didReceivePayload(self_, process: processString, payload: rawPayload, options: options)
     }
 
-    private let didReceiveProcessError: callbackProcessError = {
-        context, process, pid, payload, payloadLength, options in
+    private let didReceiveProcessError: callbackProcessError = { context, process, pid, payload, payloadLength, options in
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
         let processString = process.map { String(cString: $0) } ?? "unknown"
