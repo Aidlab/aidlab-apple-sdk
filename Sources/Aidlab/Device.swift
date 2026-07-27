@@ -75,8 +75,8 @@ public class Device: NSObject, @unchecked Sendable {
     private static let systemKillSuccess: UInt8 = 2
     private static let systemKillFailure: UInt8 = 3
     private static let syncProcessId: UInt8 = 7
+    private static let collectProcessId: UInt8 = 8
     private static let frameConfirmationTimeout: TimeInterval = 3
-    private static let fastSyncMinimumFirmware = "3.7.83"
 
     public var name: String?
     public var firmwareRevision: String?
@@ -195,9 +195,11 @@ public class Device: NSObject, @unchecked Sendable {
                 let liveHex = String(format: "%08X", liveFlags)
                 let syncHex = String(format: "%08X", syncFlags)
                 let collectCommand = "collect flags \(liveHex) \(syncHex)"
+                let activeCollectPid = activePid(for: Device.collectProcessId)
                 return try await sendProcessCommand(
                     commandBytes(collectCommand),
-                    spawnedProcessId: hasCollectAutoSyncBug() ? Device.syncProcessId : nil
+                    spawnedProcessId: hasCollectAutoSyncBug() ? Device.syncProcessId : nil,
+                    destinationPid: activeCollectPid ?? 0
                 )
             } else {
                 // Build binary command for older firmware
@@ -216,7 +218,8 @@ public class Device: NSObject, @unchecked Sendable {
                 buffer.append(UInt8((syncFlags >> 8) & 0xFF))
                 buffer.append(UInt8((syncFlags >> 0) & 0xFF))
 
-                return try await sendProcessCommand(buffer)
+                let activeCollectPid = activePid(for: Device.collectProcessId)
+                return try await sendProcessCommand(buffer, destinationPid: activeCollectPid ?? 0)
             }
 
         } else { /// Legacy
@@ -260,7 +263,10 @@ public class Device: NSObject, @unchecked Sendable {
             stopLegacyCollection()
             return nil
         }
-        return try await sendProcessCommand(commandBytes("collect off"))
+        guard let collectPid = activePid(for: Device.collectProcessId) else {
+            return nil
+        }
+        return try await sendProcessCommand(commandBytes("collect off"), destinationPid: collectPid)
     }
 
     public func setTime(_ timestamp: UInt32) {
@@ -673,42 +679,6 @@ public class Device: NSObject, @unchecked Sendable {
         failFrameTransmission(AidlabError(message: "BLE frame confirmation timed out"))
     }
 
-    private func usesV4Protocol() -> Bool {
-        guard let firmwareRevision else { return false }
-        let sanitized = firmwareRevision.split(separator: "-").first.map(String.init) ?? firmwareRevision
-        guard let current = SemVersion(sanitized),
-              let threshold = SemVersion("4.0.0")
-        else { return false }
-        return current >= threshold
-    }
-
-    private func hasCollectAutoSyncBug() -> Bool {
-        guard let firmwareRevision else { return false }
-        let sanitized = firmwareRevision.split(separator: "-").first.map(String.init) ?? firmwareRevision
-        guard let current = SemVersion(sanitized),
-              let firstAffected = SemVersion("3.7.85"),
-              let lastAffected = SemVersion("3.7.110")
-        else { return false }
-        return current >= firstAffected && current <= lastAffected
-    }
-
-    private func synchronizationStartCommand() -> String {
-        guard let firmwareRevision else { return "sync start" }
-        let sanitized = firmwareRevision.split(separator: "-").first.map(String.init) ?? firmwareRevision
-        guard let current = SemVersion(sanitized),
-              let firstFastVersion = SemVersion(Device.fastSyncMinimumFirmware)
-        else { return "sync start" }
-        return current >= firstFastVersion ? "sync fast" : "sync start"
-    }
-
-    private func commandBytes(_ command: String) -> [UInt8] {
-        var bytes = Array(command.utf8)
-        if bytes.isEmpty || bytes.last != 0 {
-            bytes.append(0)
-        }
-        return bytes
-    }
-
     private struct SystemProcessResult {
         let status: UInt8
         let pid: UInt16
@@ -746,14 +716,16 @@ public class Device: NSObject, @unchecked Sendable {
     private func sendProcessCommand(
         _ payload: [UInt8],
         timeoutSeconds: TimeInterval = 3,
-        spawnedProcessId: UInt8? = nil
+        spawnedProcessId: UInt8? = nil,
+        destinationPid: UInt16 = 0
     ) async throws -> UInt16? {
         await processCommandGate.lock()
         do {
             let pid = try await sendProcessCommandLocked(
                 payload,
                 timeoutSeconds: timeoutSeconds,
-                spawnedProcessId: spawnedProcessId
+                spawnedProcessId: spawnedProcessId,
+                destinationPid: destinationPid
             )
             await processCommandGate.unlock()
             return pid
@@ -766,7 +738,8 @@ public class Device: NSObject, @unchecked Sendable {
     private func sendProcessCommandLocked(
         _ payload: [UInt8],
         timeoutSeconds: TimeInterval,
-        spawnedProcessId: UInt8?
+        spawnedProcessId: UInt8?,
+        destinationPid: UInt16
     ) async throws -> UInt16? {
         guard let aidlabSDK else {
             throw AidlabError(message: "Device is not connected")
@@ -775,39 +748,71 @@ public class Device: NSObject, @unchecked Sendable {
             throw AidlabError(message: "Previous BLE frame is not confirmed")
         }
 
+        let expectsShellResponse = destinationPid == 0
+        let waitsForLifecycle = expectsShellResponse || spawnedProcessId != nil
         let result: SystemProcessResult = try await withCheckedThrowingContinuation { continuation in
             let waiter = PendingProcessCommand(
                 continuation: continuation,
                 spawnedProcessId: spawnedProcessId
             )
-
-            commandStateLock.lock()
-            if pendingProcessCommand != nil {
-                commandStateLock.unlock()
-                let error = AidlabError(message: "Another process command is already pending")
-                completeFrameConfirmation(error: error)
-                continuation.resume(throwing: error)
-                return
+            if !expectsShellResponse {
+                waiter.response = SystemProcessResult(
+                    status: Device.systemCreateSuccess,
+                    pid: destinationPid,
+                    processId: nil
+                )
             }
-            pendingProcessCommand = waiter
-            commandStateLock.unlock()
+
+            if waitsForLifecycle {
+                commandStateLock.lock()
+                if pendingProcessCommand != nil {
+                    commandStateLock.unlock()
+                    let error = AidlabError(message: "Another process command is already pending")
+                    completeFrameConfirmation(error: error)
+                    continuation.resume(throwing: error)
+                    return
+                }
+                pendingProcessCommand = waiter
+                commandStateLock.unlock()
+            }
 
             var bytes = payload
             guard emitTrackedFrame({
-                AidlabSDK_send(&bytes, Int32(bytes.count), 0, aidlabSDK)
+                if expectsShellResponse {
+                    AidlabSDK_send(&bytes, Int32(bytes.count), 0, aidlabSDK)
+                } else {
+                    AidlabSDK_send_process_command(
+                        &bytes,
+                        Int32(bytes.count),
+                        Int32(destinationPid),
+                        aidlabSDK
+                    )
+                }
             }) else {
                 let error = AidlabError(message: "SDK rejected the BLE frame")
-                completePendingProcessCommand(.failure(error), waiter: waiter)
+                if waitsForLifecycle {
+                    completePendingProcessCommand(.failure(error), waiter: waiter)
+                } else {
+                    continuation.resume(throwing: error)
+                }
                 failFrameTransmission(error)
                 return
             }
 
-            DispatchQueue.global().asyncAfter(deadline: .now() + timeoutSeconds) { [weak self, weak waiter] in
-                guard let self, let waiter else { return }
-                completePendingProcessCommand(
-                    .failure(AidlabError(message: "Timed out waiting for process command result")),
-                    waiter: waiter
-                )
+            if waitsForLifecycle {
+                DispatchQueue.global().asyncAfter(deadline: .now() + timeoutSeconds) { [weak self, weak waiter] in
+                    guard let self, let waiter else { return }
+                    completePendingProcessCommand(
+                        .failure(AidlabError(message: "Timed out waiting for process command result")),
+                        waiter: waiter
+                    )
+                }
+            } else {
+                continuation.resume(returning: SystemProcessResult(
+                    status: Device.systemCreateSuccess,
+                    pid: destinationPid,
+                    processId: nil
+                ))
             }
         }
 
@@ -1451,33 +1456,5 @@ public class Device: NSObject, @unchecked Sendable {
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
         self_.deviceDelegate?.didReceivePastSignalQuality(self_, timestamp: timestamp, value: UInt8(value))
-    }
-}
-
-struct SemVersion: Comparable {
-    let major: Int
-    let minor: Int
-    let patch: Int
-
-    init?(_ version: String) {
-        let parts = version.split(separator: ".").compactMap { Int($0) }
-        guard parts.count == 3 else { return nil }
-        major = parts[0]
-        minor = parts[1]
-        patch = parts[2]
-    }
-
-    static func < (lhs: SemVersion, rhs: SemVersion) -> Bool {
-        if lhs.major != rhs.major {
-            return lhs.major < rhs.major
-        }
-        if lhs.minor != rhs.minor {
-            return lhs.minor < rhs.minor
-        }
-        return lhs.patch < rhs.patch
-    }
-
-    static func == (lhs: SemVersion, rhs: SemVersion) -> Bool {
-        lhs.major == rhs.major && lhs.minor == rhs.minor && lhs.patch == rhs.patch
     }
 }
