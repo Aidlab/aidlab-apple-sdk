@@ -14,8 +14,23 @@ opt_in_rules:
 disabled_rules:
   - line_length
   - identifier_name
-  - function_parameter_count
-  - type_body_length
-  - cyclomatic_complexity
-  - function_body_length
-  - file_length
+
+cyclomatic_complexity:
+  warning: 20
+  error: 30
+
+file_length:
+  warning: 1500
+  error: 1800
+
+function_body_length:
+  warning: 150
+  error: 250
+
+function_parameter_count:
+  warning: 8
+  error: 12
+
+type_body_length:
+  warning: 1200
+  error: 1500
