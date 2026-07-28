@@ -690,16 +690,19 @@ public class Device: NSObject, @unchecked Sendable {
     }
 
     private final class PendingProcessCommand: @unchecked Sendable {
-        let continuation: CheckedContinuation<SystemProcessResult, Error>
+        let continuation: CheckedContinuation<SystemProcessResult?, Error>
         let spawnedProcessId: UInt8?
+        var responseReceived: Bool
         var response: SystemProcessResult?
 
         init(
-            continuation: CheckedContinuation<SystemProcessResult, Error>,
-            spawnedProcessId: UInt8?
+            continuation: CheckedContinuation<SystemProcessResult?, Error>,
+            spawnedProcessId: UInt8?,
+            responseReceived: Bool
         ) {
             self.continuation = continuation
             self.spawnedProcessId = spawnedProcessId
+            self.responseReceived = responseReceived
         }
     }
 
@@ -750,18 +753,12 @@ public class Device: NSObject, @unchecked Sendable {
 
         let expectsShellResponse = destinationPid == 0
         let waitsForLifecycle = expectsShellResponse || spawnedProcessId != nil
-        let result: SystemProcessResult = try await withCheckedThrowingContinuation { continuation in
+        let result: SystemProcessResult? = try await withCheckedThrowingContinuation { continuation in
             let waiter = PendingProcessCommand(
                 continuation: continuation,
-                spawnedProcessId: spawnedProcessId
+                spawnedProcessId: spawnedProcessId,
+                responseReceived: !expectsShellResponse
             )
-            if !expectsShellResponse {
-                waiter.response = SystemProcessResult(
-                    status: Device.systemCreateSuccess,
-                    pid: destinationPid,
-                    processId: nil
-                )
-            }
 
             if waitsForLifecycle {
                 commandStateLock.lock()
@@ -808,15 +805,15 @@ public class Device: NSObject, @unchecked Sendable {
                     )
                 }
             } else {
-                continuation.resume(returning: SystemProcessResult(
-                    status: Device.systemCreateSuccess,
-                    pid: destinationPid,
-                    processId: nil
-                ))
+                continuation.resume(returning: nil)
             }
         }
 
         try await frameConfirmation.wait()
+        if !expectsShellResponse {
+            return destinationPid
+        }
+        guard let result else { return nil }
         return result.accepted ? result.pid : nil
     }
 
@@ -875,7 +872,7 @@ public class Device: NSObject, @unchecked Sendable {
     }
 
     private func completePendingProcessCommand(
-        _ result: Result<SystemProcessResult, Error>,
+        _ result: Result<SystemProcessResult?, Error>,
         waiter expectedWaiter: PendingProcessCommand? = nil
     ) {
         commandStateLock.lock()
@@ -924,13 +921,14 @@ public class Device: NSObject, @unchecked Sendable {
         guard let result = parseSystemProcessInformation(process: process, payload: payload) else {
             return
         }
-        var commandCompletion: (PendingProcessCommand, Result<SystemProcessResult, Error>)?
+        var commandCompletion: (PendingProcessCommand, Result<SystemProcessResult?, Error>)?
         commandStateLock.lock()
         updateActiveProcessPids(result)
         let terminationWaiter = pendingProcessTermination
         if result.status == Device.systemCreateSuccess || result.status == Device.systemCreateFailure,
            let waiter = pendingProcessCommand {
-            if waiter.response == nil {
+            if !waiter.responseReceived {
+                waiter.responseReceived = true
                 waiter.response = result
                 if !result.accepted || waiter.spawnedProcessId == nil {
                     pendingProcessCommand = nil
@@ -938,8 +936,8 @@ public class Device: NSObject, @unchecked Sendable {
                 }
             } else if result.status == Device.systemCreateFailure || result.processId == waiter.spawnedProcessId {
                 pendingProcessCommand = nil
-                if result.accepted, let response = waiter.response {
-                    commandCompletion = (waiter, .success(response))
+                if result.accepted {
+                    commandCompletion = (waiter, .success(waiter.response))
                 } else {
                     commandCompletion = (
                         waiter,
