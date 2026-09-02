@@ -718,7 +718,7 @@ public class Device: NSObject, @unchecked Sendable {
 
     private func sendProcessCommand(
         _ payload: [UInt8],
-        timeoutSeconds: TimeInterval = 3,
+        timeoutSeconds: TimeInterval = 6,
         spawnedProcessId: UInt8? = nil,
         destinationPid: UInt16 = 0
     ) async throws -> UInt16? {
@@ -820,7 +820,7 @@ public class Device: NSObject, @unchecked Sendable {
     private func sendActiveProcessCommand(
         _ payload: [UInt8],
         pid: UInt16,
-        timeoutSeconds: TimeInterval = 3
+        timeoutSeconds: TimeInterval = 6
     ) async throws -> UInt16? {
         await processCommandGate.lock()
         do {
