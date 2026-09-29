@@ -7,6 +7,10 @@
 //
 //  Note: Aidlab C++ SDK **does not** handle Bluetooth communication.
 //
+//  Threading: an SDK instance is not thread-safe. Serialize every call for one instance. Callbacks run synchronously on
+//  the calling thread, inside AidlabSDK_process_ble_chunk or AidlabSDK_send. Do not call AidlabSDK_destroy from a
+//  callback; defer it until the SDK call that invoked the callback has returned.
+//
 
 #ifndef SHARED_H_
 #define SHARED_H_
@@ -73,8 +77,13 @@ typedef enum {
 
 typedef enum {
     AIDLAB_ERROR_NONE = 0,
+    /// Link failure detected by the platform integration (failed write, ACK deadline). The core does not emit it.
     AIDLAB_ERROR_TRANSPORT = 1000,
+    /// The device sent data that violates the transport protocol. The session is unreliable.
     AIDLAB_ERROR_PROTOCOL = 2000,
+    /// Local SDK condition, for example invalid arguments, a send while a V4 frame awaits ACK/NAK, or device data
+    /// that the SDK drops because no process can admit or decode it. Nothing is wrong with the link and the session
+    /// remains usable.
     AIDLAB_ERROR_SDK = 9000
 } AidlabErrorCode;
 
@@ -106,6 +115,7 @@ typedef void (*callbackSignalQuality)(void*, uint64_t, uint8_t);
 typedef void (*callbackEda)(void*, uint64_t, float);  // timestamp, conductance (µS)
 typedef void (*callbackGps)(void*, uint64_t, float, float, float, float, float,
                             float);  // timestamp, lat, lon, alt, speed (m/s), heading, hdop
+/// Remaining synchronization data in bytes and the transfer speed in bytes per second, or -1 while unknown.
 typedef void (*callbackUnsynchronizedSize)(void*, uint32_t, float);
 typedef void (*callbackSyncState)(void*, SyncState);
 typedef void (*callbackUserEvent)(void*, uint64_t);
@@ -124,6 +134,12 @@ typedef void (*callbackBLESend)(void* context, const uint8_t* data, int size);
 /// The public send API requests ACK/NAK for V4 frames, and this callback fires after that transaction resolves.
 /// Legacy protocols do not have a protocol-level ready callback; their platform writes use GATT write responses.
 typedef void (*callbackBLEReady)(void* context);
+
+/// @brief Callback reporting how the device resolved the V4 frame that is awaiting ACK/NAK.
+/// It fires once per resolved frame, immediately before callbackBLEReady. Result 0 means the device acknowledged the
+/// frame. Any other value is the error byte of the device NAK (see src/Communication/src/v4/README.md); a NAK rejects
+/// that frame and must not be retried automatically. Legacy protocols (V1-V3) have no ACK/NAK and never invoke it.
+typedef void (*callbackBLEFrameResult)(void* context, uint8_t result);
 
 /// @brief Callback function type for receiving payloads from the device.
 /// This callback delivers the raw payload data after transport protocol headers are stripped.
@@ -156,9 +172,15 @@ SHARED_EXPORT void AidlabSDK_set_ble_send_callback(callbackBLESend bleSend, void
 /// @param aidlabSDK Pointer to the Aidlab SDK instance
 SHARED_EXPORT void AidlabSDK_set_ble_ready_callback(callbackBLEReady bleReady, void* aidlabSDK);
 
+/// @brief Registers the V4 frame result callback, which distinguishes ACK from NAK for the frame in flight.
+///
+/// @param frameResult Callback to invoke with the frame result
+/// @param aidlabSDK Pointer to the Aidlab SDK instance
+SHARED_EXPORT void AidlabSDK_set_ble_frame_result_callback(callbackBLEFrameResult frameResult, void* aidlabSDK);
+
 /// @brief Automatically detects protocol version and processes chunk accordingly:
 /// - V1-V3: Legacy header parsing and packet assembly
-/// - V4: Modern protocol with compression and CRC validation
+/// - V4: Modern protocol with optional compression and per-frame ACK/NAK
 ///
 /// @param data Pointer to the received BLE chunk data
 /// @param size Size of the received chunk in bytes
@@ -175,8 +197,9 @@ SHARED_EXPORT void AidlabSDK_notify_ble_send_failure(void* aidlabSDK);
 /// Each device should have a unique instance of AidlabSDK.
 /// This should be created upon successful connection to the device and discovery of all device's Bluetooth services.
 ///
-/// @param fwRevision Pointer to the firmware revision string (UTF-8, not null-terminated required)
-/// @param size Size of the firmware revision string.
+/// @param fwRevision Pointer to the firmware revision bytes (UTF-8). A null terminator is not required; bytes from the
+/// first null byte onward are ignored.
+/// @param size Size of the firmware revision buffer.
 /// @return Pointer to the Aidlab SDK instance, or nullptr when firmware revision is invalid.
 SHARED_EXPORT void* AidlabSDK_create(const uint8_t* fwRevision, int size);
 
@@ -220,6 +243,7 @@ SHARED_EXPORT void AidlabSDK_set_process_error_callback(callbackProcessError cal
 /// @brief Sets the typed SDK error callback.
 /// TRANSPORT and PROTOCOL errors indicate that the current communication session is unreliable.
 /// Consumers should reset the connection/session before retrying application-level commands.
+/// Reset outside the callback: AidlabSDK_destroy must not run while the SDK is still inside the call that reported it.
 SHARED_EXPORT void AidlabSDK_set_error_callback(callbackError callback, void* context, void* aidlabSDK);
 
 SHARED_EXPORT void AidlabSDK_set_eda_callback(callbackEda eda, void* aidlabSDK);
