@@ -246,10 +246,8 @@ final class CoreBluetoothAidlabTransport: NSObject, AidlabTransport, CoreBluetoo
             return .deviceDisconnected
         }
 
-        if nsError.code == 6 {
-            return .timeout
-        }
-        if nsError.code == 7 {
+        // A connection timeout (6) is a dropped link; .timeout means the SDK gave up on the device.
+        if nsError.code == 6 || nsError.code == 7 {
             return .deviceDisconnected
         }
         return .unknownError

@@ -8,7 +8,7 @@ let package = Package(
     platforms: [
         .iOS(.v15),
         .macOS(.v11),
-        .tvOS(.v14),
+        .tvOS(.v15),
         .watchOS(.v8)
     ],
     products: [
@@ -26,9 +26,13 @@ let package = Package(
             name: "Aidlab",
             dependencies: ["AidlabSDK"],
             linkerSettings: [
-                .linkedLibrary("c++"),
-                .linkedLibrary("z")
+                .linkedLibrary("c++")
             ]
+        ),
+        .testTarget(
+            name: "AidlabTests",
+            dependencies: ["Aidlab"],
+            swiftSettings: [.swiftLanguageMode(.v5)]
         )
     ]
 )

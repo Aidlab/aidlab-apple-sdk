@@ -6,7 +6,7 @@
 import AidlabSDK
 import Foundation
 
-/// Callbacks may arrive on a background thread. Dispatch to the appropriate queue if needed.
+/// Callbacks arrive on the main queue.
 public protocol DeviceDelegate: AnyObject {
     func didReceiveECG(_ device: Device, timestamp: UInt64, value: Float)
 
@@ -79,7 +79,7 @@ public protocol DeviceDelegate: AnyObject {
 
     func didDetectUserEvent(_ device: Device, timestamp: UInt64)
 
-    func didReceiveSignalQuality(_ device: Device, timestamp: UInt64, value: Int32)
+    func didReceiveSignalQuality(_ device: Device, timestamp: UInt64, value: UInt8)
 
     func syncStateDidChange(_ device: Device, state: SyncState)
 

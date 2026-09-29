@@ -6,38 +6,31 @@
 import CoreBluetooth
 import Foundation
 
-extension Device {
-    public func notifyDidFailToConnect(error: Error?) {
-        if let forwarding = transport as? CoreBluetoothLifecycleForwarding {
-            forwarding.notifyDidFailToConnect(error: error)
-            return
+public extension Device {
+    func notifyDidFailToConnect(error: Error?) {
+        onMainQueue { [self] in
+            if let forwarding = transport as? CoreBluetoothLifecycleForwarding {
+                forwarding.notifyDidFailToConnect(error: error)
+                return
+            }
+            let resolvedError = error.map(AidlabError.wrapping) ?? AidlabError(message: "Fail to connect")
+            deviceDelegate?.didReceiveError(self, error: resolvedError)
         }
-        let resolvedError = error.map(AidlabError.wrapping) ?? AidlabError(message: "Fail to connect")
-        deviceDelegate?.didReceiveError(self, error: resolvedError)
     }
 
-    public func notifyDidConnect() {
-        (transport as? CoreBluetoothLifecycleForwarding)?.notifyDidConnect()
-    }
-
-    public func notifyDidDisconnect(timestamp _: CFAbsoluteTime? = nil, isReconnecting _: Bool? = nil, error: Error?) {
-        if let forwarding = transport as? CoreBluetoothLifecycleForwarding {
-            forwarding.notifyDidDisconnect(error: error)
-            return
+    func notifyDidConnect() {
+        onMainQueue { [self] in
+            (transport as? CoreBluetoothLifecycleForwarding)?.notifyDidConnect()
         }
-        handleDisconnected(reason: .deviceDisconnected)
     }
 
-    // Backward-compatible aliases for in-module calls.
-    func onFailToConnect(error: Error?) {
-        notifyDidFailToConnect(error: error)
-    }
-
-    func onDidConnect() {
-        notifyDidConnect()
-    }
-
-    func onDisconnectPeripheral(timestamp: CFAbsoluteTime?, isReconnecting: Bool?, error: Error?) {
-        notifyDidDisconnect(timestamp: timestamp, isReconnecting: isReconnecting, error: error)
+    func notifyDidDisconnect(timestamp _: CFAbsoluteTime? = nil, isReconnecting _: Bool? = nil, error: Error?) {
+        onMainQueue { [self] in
+            if let forwarding = transport as? CoreBluetoothLifecycleForwarding {
+                forwarding.notifyDidDisconnect(error: error)
+                return
+            }
+            handleDisconnected(reason: .deviceDisconnected)
+        }
     }
 }

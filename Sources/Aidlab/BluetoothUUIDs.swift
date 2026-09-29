@@ -62,11 +62,15 @@ var dataTypesUUID: [DataType: CBUUID] {
         DataType.activity: MotionService.activityUUID,
         DataType.steps: MotionService.stepsUUID,
         DataType.orientation: MotionService.orientationUUID,
+        DataType.bodyPosition: MotionService.orientationUUID,
         DataType.heartRate: HeartRateService.heartRateMeasurementCharacteristic,
+        DataType.rr: HeartRateService.heartRateMeasurementCharacteristic,
         DataType.soundVolume: soundVolumeCharacteristicUUID,
+        DataType.pressure: nasalCannulaCharacteristicUUID,
         DataType.skinTemperature: temperatureCharacteristicUUID,
         DataType.motion: motionCharacteristicUUID,
         DataType.ecg: ecgCharacteristicUUID,
-        DataType.respiration: respirationCharacteristicUUID
+        DataType.respiration: respirationCharacteristicUUID,
+        DataType.respirationRate: respirationCharacteristicUUID,
     ]
 }

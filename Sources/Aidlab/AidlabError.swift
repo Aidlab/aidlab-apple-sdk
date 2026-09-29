@@ -6,10 +6,14 @@
 import Foundation
 
 public final class AidlabError: NSObject, LocalizedError {
+    /// Class of an error that ``DeviceDelegate/didReceiveError(_:error:)`` reports.
     public enum Code: Int32, Sendable {
         case none = 0
+        /// The link failed, either a write or the frame confirmation deadline; the SDK ends the session.
         case transport = 1000
+        /// The device broke the transport protocol; the SDK ends the session.
         case `protocol` = 2000
+        /// A local condition, such as a misused API or device data that the SDK drops; the session continues.
         case sdk = 9000
     }
 

@@ -7,7 +7,7 @@ import AidlabSDK
 @preconcurrency import CoreBluetooth
 import Foundation
 
-private final class FrameConfirmation: @unchecked Sendable {
+final class FrameConfirmation: @unchecked Sendable {
     private let lock = NSLock()
     private var result: Result<Void, Error>?
     private var continuation: CheckedContinuation<Void, Error>?
@@ -44,7 +44,16 @@ private struct QueuedBLEChunk {
     let completesFrame: Bool
 }
 
-private actor ProcessCommandGate {
+/// Device state and its C core live on the main queue; public methods may be called from any thread.
+func onMainQueue(_ work: @escaping @Sendable () -> Void) {
+    if Thread.isMainThread {
+        work()
+    } else {
+        DispatchQueue.main.async(execute: work)
+    }
+}
+
+actor ProcessCommandGate {
     private var isLocked = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
 
@@ -69,14 +78,21 @@ private actor ProcessCommandGate {
     }
 }
 
+/// An Aidlab or Aidmed One.
+///
+/// Commands (``collect(dataTypes:dataTypesToStore:)``, ``stopCollect()``, ``startSynchronization()``,
+/// ``stopSynchronization()``, ``clearSynchronization()``) return the PID of the device process that handles them, or
+/// `nil` when no process does. They throw ``AidlabError`` when the device refuses or rejects the command, the link
+/// fails or the device does not answer in time.
 public class Device: NSObject, @unchecked Sendable {
     private static let systemCreateSuccess: UInt8 = 0
     private static let systemCreateFailure: UInt8 = 1
     private static let systemKillSuccess: UInt8 = 2
     private static let systemKillFailure: UInt8 = 3
-    private static let syncProcessId: UInt8 = 7
+    static let syncProcessId: UInt8 = 7
     private static let collectProcessId: UInt8 = 8
     private static let frameConfirmationTimeout: TimeInterval = 3
+    private static let legacyCommandReceived = Data("RECEIVED".utf8)
 
     public var name: String?
     public var firmwareRevision: String?
@@ -90,14 +106,16 @@ public class Device: NSObject, @unchecked Sendable {
     }
 
     let transport: AidlabTransport
-    private var activeNotificationUUIDs: Set<CBUUID> = []
-    private var legacyCollectionNotificationUUIDs: Set<CBUUID> = []
+    var activeNotificationUUIDs: Set<CBUUID> = []
+    var legacyCollectionNotificationUUIDs: Set<CBUUID> = []
     private var didHandleDisconnect = false
-    private let processCommandGate = ProcessCommandGate()
-    private let commandStateLock = NSLock()
+    /// Reason for a disconnect that the SDK started; the transport reports it as an app disconnect.
+    private var resetReason: DisconnectReason?
+    let processCommandGate = ProcessCommandGate()
     private var pendingProcessCommand: PendingProcessCommand?
     private var pendingProcessTermination: PendingProcessTermination?
     private var activeProcessPids: [UInt8: UInt16] = [:]
+    var legacyCommandConfirmation: FrameConfirmation?
     /// Backwards-compatible access to the underlying CoreBluetooth peripheral, if applicable.
     public var peripheral: CBPeripheral? {
         (transport as? CoreBluetoothAidlabTransport)?.peripheral
@@ -112,7 +130,8 @@ public class Device: NSObject, @unchecked Sendable {
         if let coreBluetoothTransport = transport as? CoreBluetoothAidlabTransport {
             coreBluetoothTransport.onRSSIRead = { [weak self] rssi in
                 guard let self else { return }
-                deviceDelegate?.didUpdateRSSI(self, rssi: rssi.int32Value)
+                let value = rssi.int32Value
+                onMainQueue { self.deviceDelegate?.didUpdateRSSI(self, rssi: value) }
             }
         }
     }
@@ -137,46 +156,64 @@ public class Device: NSObject, @unchecked Sendable {
         self.init(transport: defaultTransport)
     }
 
-    public func connect(delegate: DeviceDelegate) {
-        deviceDelegate = delegate
-        resetBleQueue()
-        didHandleDisconnect = false
-        stopAllNotifications()
-
-        transport.onDisconnect = { [weak self] reason, error in
-            guard let self else { return }
-            if let error {
-                deviceDelegate?.didReceiveError(self, error: AidlabError.wrapping(error))
-            }
-            handleDisconnected(reason: reason)
+    deinit {
+        if let aidlabSDK {
+            Device.release(aidlabSDK)
         }
+    }
 
-        transport.connect { [weak self] result in
-            guard let self else { return }
-            switch result {
-            case .success:
-                onTransportConnected()
-            case let .failure(error):
-                deviceDelegate?.didReceiveError(self, error: AidlabError.wrapping(error))
+    public func connect(delegate: DeviceDelegate) {
+        nonisolated(unsafe) let delegate = delegate
+        onMainQueue { [self] in
+            deviceDelegate = delegate
+            resetBleQueue()
+            didHandleDisconnect = false
+            resetReason = nil
+            stopAllNotifications()
+
+            transport.onDisconnect = { [weak self] reason, error in
+                guard let self else { return }
+                onMainQueue {
+                    if let error {
+                        self.deviceDelegate?.didReceiveError(self, error: AidlabError.wrapping(error))
+                    }
+                    self.handleDisconnected(reason: reason)
+                }
+            }
+
+            transport.connect { [weak self] result in
+                guard let self else { return }
+                onMainQueue {
+                    switch result {
+                    case .success:
+                        self.onTransportConnected()
+                    case let .failure(error):
+                        self.deviceDelegate?.didReceiveError(self, error: AidlabError.wrapping(error))
+                    }
+                }
             }
         }
     }
 
     public func disconnect() {
-        resetBleQueue()
-        transport.disconnect()
+        onMainQueue { [self] in
+            resetBleQueue()
+            transport.disconnect()
+        }
     }
 
+    /// Configures live and autonomous collection. Returns the collect PID, or `nil` on firmware before 3.6.0.
+    @MainActor
     public func collect(dataTypes: [DataType], dataTypesToStore: [DataType]) async throws -> UInt16? {
         guard aidlabSDK != nil else {
             throw AidlabError(message: "API misuse: Attempt to use the API without an established connection. Please ensure the device is connected using the connect() method before invoking this API.")
         }
 
-        guard let firmwareRevision, let firmwareSemantic = SemVersion(firmwareRevision), let legacySemanticVersion = SemVersion("3.6.0") else {
+        guard let firmwareSemantic = firmwareVersion else {
             throw AidlabError(message: "API misuse: Attempt to use the API without an established connection. Please ensure the device is connected using the connect() method before invoking this API.")
         }
 
-        if firmwareSemantic >= legacySemanticVersion {
+        if !isLegacyFirmware() {
             // Build flags from signal arrays (use bit flags)
             var liveFlags: UInt32 = 0
             var syncFlags: UInt32 = 0
@@ -198,6 +235,7 @@ public class Device: NSObject, @unchecked Sendable {
                 let activeCollectPid = activePid(for: Device.collectProcessId)
                 return try await sendProcessCommand(
                     commandBytes(collectCommand),
+                    startedProcessId: Device.collectProcessId,
                     spawnedProcessId: hasCollectAutoSyncBug() ? Device.syncProcessId : nil,
                     destinationPid: activeCollectPid ?? 0
                 )
@@ -219,28 +257,43 @@ public class Device: NSObject, @unchecked Sendable {
                 buffer.append(UInt8((syncFlags >> 0) & 0xFF))
 
                 let activeCollectPid = activePid(for: Device.collectProcessId)
-                return try await sendProcessCommand(buffer, destinationPid: activeCollectPid ?? 0)
+                return try await sendProcessCommand(
+                    buffer,
+                    startedProcessId: Device.collectProcessId,
+                    destinationPid: activeCollectPid ?? 0
+                )
             }
 
         } else { /// Legacy
+            try await configureLegacyStorage(dataTypesToStore)
             startLegacyCollection(dataTypes: dataTypes)
             return nil
         }
     }
 
     public func readRSSI() {
-        guard let peripheral else {
-            deviceDelegate?.didReceiveError(self, error: AidlabError(message: "RSSI not available for this transport"))
-            return
+        onMainQueue { [self] in
+            guard let peripheral else {
+                deviceDelegate?.didReceiveError(self, error: AidlabError(message: "RSSI not available for this transport"))
+                return
+            }
+            peripheral.readRSSI()
         }
-        peripheral.readRSSI()
     }
 
+    /// Starts sending stored data. Returns the sync PID, or `nil` on firmware before 2.2.18.
+    @MainActor
     public func startSynchronization() async throws -> UInt16? {
-        try await sendProcessCommand(commandBytes(synchronizationStartCommand()))
+        try await sendProcessCommand(commandBytes(synchronizationStartCommand()), startedProcessId: Device.syncProcessId)
     }
 
+    /// Stops sending stored data. Returns the PID of the stopped sync process, or `nil` when no synchronization runs
+    /// or on firmware before 2.2.18.
+    @MainActor
     public func stopSynchronization() async throws -> UInt16? {
+        if !hasProcesses() {
+            return try await sendProcessCommand(commandBytes("sync stop"))
+        }
         let activePid = activePid(for: Device.syncProcessId)
         if let activePid {
             return try await sendActiveProcessCommand(commandBytes("sync stop"), pid: activePid)
@@ -248,58 +301,60 @@ public class Device: NSObject, @unchecked Sendable {
         return nil
     }
 
+    /// Clears data stored for synchronization. Returns the PID, or `nil` on firmware before 2.2.18.
+    @MainActor
     public func clearSynchronization() async throws -> UInt16? {
-        try await sendProcessCommand(commandBytes("sync clear"))
+        try await sendProcessCommand(commandBytes("sync clear"), startedProcessId: Device.syncProcessId)
     }
 
+    /// Stops live streaming without changing autonomous storage. Returns the collect PID, or `nil` on firmware
+    /// before 3.6.0.
+    @MainActor
     public func stopCollect() async throws -> UInt16? {
-        guard let firmwareRevision,
-              let firmware = SemVersion(firmwareRevision),
-              let processCollectionVersion = SemVersion("3.6.0")
-        else {
+        guard firmwareVersion != nil else {
             throw AidlabError(message: "Firmware revision is unavailable")
         }
-        if firmware < processCollectionVersion {
+        if isLegacyFirmware() {
             stopLegacyCollection()
             return nil
         }
         guard let collectPid = activePid(for: Device.collectProcessId) else {
-            return nil
+            // A reconnect forgets the PIDs while the device keeps collecting; the shell finds the process.
+            return try await sendProcessCommand(commandBytes("collect off"), startedProcessId: Device.collectProcessId)
         }
         return try await sendProcessCommand(commandBytes("collect off"), destinationPid: collectPid)
     }
 
-    public func setTime(_ timestamp: UInt32) {
-        let payload = withUnsafeBytes(of: timestamp.littleEndian) { Data($0) }
-        transport.writeCharacteristic(
-            CurrentTimeService.currentTimeCharacteristic,
-            data: payload,
-            withResponse: true
-        ) { [weak self] result in
-            guard let self else { return }
-            if case let .failure(error) = result {
-                deviceDelegate?.didReceiveError(self, error: AidlabError.wrapping(error))
+    /// Sets the device clock to a Unix timestamp in seconds; throws when the write fails.
+    @MainActor
+    public func setTime(_ timestamp: UInt32) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            writeTime(timestamp) { result in
+                continuation.resume(with: result)
             }
         }
     }
 
-    /// Sends a raw payload to a runtime destination PID. Use processId 0 for shell/system commands.
-    public func send(_ bytes: [UInt8], processId: Int = 0) {
-        guard let aidlabSDK, !bytes.isEmpty else { return }
-        guard beginFrameConfirmation() != nil else {
-            deviceDelegate?.didReceiveError(
-                self,
-                error: AidlabError(message: "Previous BLE frame is not confirmed")
-            )
-            return
+    /// Sends a raw payload to a runtime destination PID and returns once the device has it. Use processId 0 for
+    /// shell/system commands. Payloads go out in call order, each after the command in flight. Throws when the
+    /// payload does not reach the device; the process lifecycle arrives through the delegate.
+    @MainActor
+    public func send(_ bytes: [UInt8], processId: Int = 0) async throws {
+        guard !bytes.isEmpty else { return }
+        guard let pid = UInt16(exactly: processId) else {
+            throw AidlabError(message: "Invalid process ID \(processId)")
         }
-        var payload = bytes
-        guard emitTrackedFrame({
-            AidlabSDK_send(&payload, Int32(payload.count), Int32(processId), aidlabSDK)
-        }) else {
-            failFrameTransmission(AidlabError(message: "SDK rejected the BLE frame"))
-            return
-        }
+        _ = try await sendProcessCommand(bytes, destinationPid: pid, raw: true)
+    }
+
+    private func writeTime(_ timestamp: UInt32, completion: @escaping (Result<Void, Error>) -> Void) {
+        let payload = withUnsafeBytes(of: timestamp.littleEndian) { Data($0) }
+        transport.writeCharacteristic(
+            CurrentTimeService.currentTimeCharacteristic,
+            data: payload,
+            withResponse: true,
+            completion: completion
+        )
     }
 
     // -- Internal -------------------------------------------------------------
@@ -310,30 +365,30 @@ public class Device: NSObject, @unchecked Sendable {
 
     var maxCmdPackageLength: Int = 20
 
-    // BLE transport state (chunk queue handled on the main actor)
+    // BLE transport state
     private var chunkQueue: [QueuedBLEChunk] = []
     var readyForNextChunk: Bool = true
-    private let frameConfirmationLock = NSLock()
     private var awaitingFrameConfirmation = false
     private var frameConfirmationGeneration: UInt64 = 0
     private var frameConfirmationDeadline: DispatchWorkItem?
     private var currentFrameConfirmation: FrameConfirmation?
-    private var expectedFrameCallbackThread: ObjectIdentifier?
+    /// Set while a core send runs; cleared when the core emits the frame.
+    private var awaitsTrackedFrame = false
 
-    private func startNotify(
+    func startNotify(
         uuid: CBUUID,
         required: Bool,
-        onData: @escaping (Data) -> Void
+        onData: @escaping @Sendable (Data) -> Void
     ) {
         activeNotificationUUIDs.insert(uuid)
         transport.startNotifications(
             uuid,
-            onData: onData,
+            onData: { data in onMainQueue { onData(data) } },
             onError: { [weak self] error in
-                guard let self else { return }
-                if required {
-                    deviceDelegate?.didReceiveError(self, error: AidlabError.wrapping(error))
-                    transport.disconnect()
+                guard let self, required else { return }
+                onMainQueue {
+                    self.deviceDelegate?.didReceiveError(self, error: AidlabError.wrapping(error))
+                    self.resetSession(.unknownError)
                 }
             }
         )
@@ -360,43 +415,43 @@ public class Device: NSObject, @unchecked Sendable {
         didHandleDisconnect = true
         completePendingProcessCommand(.failure(AidlabError(message: "Device disconnected")))
         completePendingProcessTermination(.failure(AidlabError(message: "Device disconnected")))
-        commandStateLock.lock()
+        legacyCommandConfirmation?.finish(.failure(AidlabError(message: "Device disconnected")))
         activeProcessPids.removeAll()
-        commandStateLock.unlock()
 
-        var resolvedReason = reason
-        if !checkCompatibility() {
-            deviceDelegate?.didReceiveError(self, error: AidlabError(message: "Unsupported SDK"))
-            resolvedReason = .sdkOutdated
-        }
+        let resolvedReason = resetReason ?? reason
+        resetReason = nil
 
         stopAllNotifications()
         resetBleQueue()
 
         if let aidlabSDK {
-            AidlabSDK_set_error_callback(nil, nil, aidlabSDK)
-            AidlabSDK_set_context(nil, aidlabSDK)
-            AidlabSDK_destroy(aidlabSDK)
+            Device.release(aidlabSDK)
         }
         aidlabSDK = nil
 
-        deviceDelegate?.didDisconnect(self, reason: resolvedReason)
+        // Clear the session first so that a reconnect from didDisconnect keeps its delegate.
+        let delegate = deviceDelegate
         deviceDelegate = nil
         transport.onDisconnect = nil
+        delegate?.didDisconnect(self, reason: resolvedReason)
     }
 
-    private func readConnectionMetadata(completion: @escaping () -> Void) {
-        func readUtf8(_ uuid: CBUUID, completion: @escaping (String?) -> Void) {
+    /// Detaches the core from its device and destroys it once the core call on the stack, if any, returns.
+    private static func release(_ sdk: UnsafeMutableRawPointer) {
+        AidlabSDK_set_error_callback(nil, nil, sdk)
+        AidlabSDK_set_context(nil, sdk)
+        nonisolated(unsafe) let core = sdk
+        DispatchQueue.main.async { AidlabSDK_destroy(core) }
+    }
+
+    private func readConnectionMetadata(completion: @escaping @Sendable () -> Void) {
+        @Sendable func readUtf8(_ uuid: CBUUID, completion: @escaping @Sendable (String?) -> Void) {
             transport.readCharacteristic(uuid) { result in
-                switch result {
-                case let .success(data):
-                    let value = String(bytes: data, encoding: .utf8)?
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                        .replacingOccurrences(of: "\0", with: "") ?? ""
-                    completion(value.isEmpty ? nil : value)
-                case .failure:
-                    completion(nil)
-                }
+                let text = (try? result.get()).flatMap { String(bytes: $0, encoding: .utf8) }?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .replacingOccurrences(of: "\0", with: "")
+                let value = text?.isEmpty == false ? text : nil
+                onMainQueue { completion(value) }
             }
         }
 
@@ -415,7 +470,7 @@ public class Device: NSObject, @unchecked Sendable {
 
                         guard serialNumber != nil, firmwareRevision != nil, hardwareRevision != nil else {
                             deviceDelegate?.didReceiveError(self, error: AidlabError(message: "Failed to read device metadata"))
-                            transport.disconnect()
+                            resetSession(.unknownError)
                             return
                         }
 
@@ -428,15 +483,18 @@ public class Device: NSObject, @unchecked Sendable {
 
     /// Serial number, firmware, and hardware version are ready
     private func didConnect() {
-        if !checkCompatibility() {
-            deviceDelegate?.didConnect(self)
-            disconnect()
-            return
+        // The firmware needs the clock to timestamp and store sessions; before 2.2.2 it has no clock service.
+        if hasClockService() {
+            writeTime(UInt32(Date().timeIntervalSince1970)) { [weak self] result in
+                guard let self, case let .failure(error) = result else { return }
+                onMainQueue { self.deviceDelegate?.didReceiveError(self, error: AidlabError.wrapping(error)) }
+            }
         }
 
-        setTime(UInt32(Date().timeIntervalSince1970))
-
-        createAidlabSDK()
+        guard createAidlabSDK() else {
+            resetSession(.unknownError)
+            return
+        }
 
         if usesV4Protocol() {
             let negotiated = transport.mtuSize
@@ -454,7 +512,8 @@ public class Device: NSObject, @unchecked Sendable {
         drainChunkQueue()
 
         startNotify(
-            uuid: BatteryLevelService.batteryLevelCharacteristic,
+            // Firmware before 3.6.0 reports the battery on its own characteristic.
+            uuid: isLegacyFirmware() ? batteryCharacteristicUUID : BatteryLevelService.batteryLevelCharacteristic,
             required: false,
             onData: { [weak self] data in
                 self?.processBatteryPacket(data)
@@ -465,10 +524,10 @@ public class Device: NSObject, @unchecked Sendable {
         deviceDelegate?.didConnect(self)
     }
 
-    func createAidlabSDK() {
+    func createAidlabSDK() -> Bool {
         guard let firmwareRevision else {
             deviceDelegate?.didReceiveError(self, error: AidlabError(message: "Missing firmware revision"))
-            return
+            return false
         }
 
         var fwVersion: [UInt8] = Array(firmwareRevision.utf8)
@@ -476,8 +535,8 @@ public class Device: NSObject, @unchecked Sendable {
         resetBleQueue()
 
         guard let aidlabSDK else {
-            deviceDelegate?.didReceiveError(self, error: AidlabError(message: "Internal error"))
-            return
+            deviceDelegate?.didReceiveError(self, error: AidlabError(message: "Unsupported firmware revision \(firmwareRevision)"))
+            return false
         }
 
         let context = Unmanaged.passUnretained(self).toOpaque()
@@ -486,6 +545,7 @@ public class Device: NSObject, @unchecked Sendable {
 
         AidlabSDK_set_ble_send_callback(bleSendCallback, aidlabSDK)
         AidlabSDK_set_ble_ready_callback(bleReadyCallback, aidlabSDK)
+        AidlabSDK_set_ble_frame_result_callback(bleFrameResultCallback, aidlabSDK)
 
         AidlabSDK_init_callbacks(didReceiveECG,
                                  didReceiveRespiration,
@@ -520,13 +580,7 @@ public class Device: NSObject, @unchecked Sendable {
         AidlabSDK_init_synchronization_callbacks(syncStateDidChange, didReceiveUnsynchronizedSize, didReceivePastECG, didReceivePastRespiration, didReceivePastSkinTemperature, didReceivePastHeartRate, didReceivePastRr, didReceivePastActivity, didReceivePastRespirationRate, didReceivePastSteps, didDetectPastUserEvent, didReceivePastSoundVolume, didReceivePastPressure, didReceivePastAccelerometer, didReceivePastGyroscope, didReceivePastQuaternion, didReceivePastOrientation, didReceivePastMagnetometer, didReceivePastBodyPosition, didReceivePastSignalQuality, aidlabSDK)
         AidlabSDK_set_past_eda_callback(didReceivePastEDA, aidlabSDK)
         AidlabSDK_set_past_gps_callback(didReceivePastGPS, aidlabSDK)
-    }
-
-    func checkCompatibility() -> Bool {
-        guard let version = firmwareRevision else { return true }
-        let stringArray = version.split(separator: ".")
-        let minor = Int(stringArray[1]) ?? 0
-        return Config.supportedAidlabVersion >= minor ? true : false
+        return true
     }
 
     // -- Private --------------------------------------------------------------
@@ -571,47 +625,28 @@ public class Device: NSObject, @unchecked Sendable {
     }
 
     private func beginFrameConfirmation() -> FrameConfirmation? {
-        frameConfirmationLock.lock()
-        guard !awaitingFrameConfirmation else {
-            frameConfirmationLock.unlock()
-            return nil
-        }
+        guard !awaitingFrameConfirmation else { return nil }
         let confirmation = FrameConfirmation()
         awaitingFrameConfirmation = true
         currentFrameConfirmation = confirmation
         frameConfirmationGeneration &+= 1
-        let previousDeadline = frameConfirmationDeadline
+        frameConfirmationDeadline?.cancel()
         frameConfirmationDeadline = nil
-        frameConfirmationLock.unlock()
-        previousDeadline?.cancel()
         return confirmation
     }
 
+    /// Runs a core send and reports whether the core emitted a frame for it.
     private func emitTrackedFrame(_ action: () -> Void) -> Bool {
-        let thread = ObjectIdentifier(Thread.current)
-        frameConfirmationLock.lock()
-        expectedFrameCallbackThread = thread
-        frameConfirmationLock.unlock()
-
+        awaitsTrackedFrame = true
         action()
-
-        frameConfirmationLock.lock()
-        let emitted = expectedFrameCallbackThread != thread
-        if !emitted {
-            expectedFrameCallbackThread = nil
-        }
-        frameConfirmationLock.unlock()
+        let emitted = !awaitsTrackedFrame
+        awaitsTrackedFrame = false
         return emitted
     }
 
     private func consumeTrackedFrameCallback() -> Bool {
-        let thread = ObjectIdentifier(Thread.current)
-        frameConfirmationLock.lock()
-        let tracked = expectedFrameCallbackThread == thread
-        if tracked {
-            expectedFrameCallbackThread = nil
-        }
-        frameConfirmationLock.unlock()
+        let tracked = awaitsTrackedFrame
+        awaitsTrackedFrame = false
         return tracked
     }
 
@@ -620,23 +655,15 @@ public class Device: NSObject, @unchecked Sendable {
             completeFrameConfirmation()
             return
         }
-
-        frameConfirmationLock.lock()
-        guard awaitingFrameConfirmation else {
-            frameConfirmationLock.unlock()
-            return
-        }
+        guard awaitingFrameConfirmation else { return }
 
         frameConfirmationGeneration &+= 1
         let generation = frameConfirmationGeneration
-        let previousDeadline = frameConfirmationDeadline
+        frameConfirmationDeadline?.cancel()
         let deadline = DispatchWorkItem { [weak self] in
             self?.frameConfirmationDidTimeout(generation: generation)
         }
         frameConfirmationDeadline = deadline
-        frameConfirmationLock.unlock()
-
-        previousDeadline?.cancel()
         DispatchQueue.main.asyncAfter(
             deadline: .now() + Device.frameConfirmationTimeout,
             execute: deadline
@@ -644,16 +671,13 @@ public class Device: NSObject, @unchecked Sendable {
     }
 
     private func completeFrameConfirmation(error: Error? = nil) {
-        frameConfirmationLock.lock()
         awaitingFrameConfirmation = false
         frameConfirmationGeneration &+= 1
-        let deadline = frameConfirmationDeadline
-        let confirmation = currentFrameConfirmation
+        frameConfirmationDeadline?.cancel()
         frameConfirmationDeadline = nil
+        let confirmation = currentFrameConfirmation
         currentFrameConfirmation = nil
-        expectedFrameCallbackThread = nil
-        frameConfirmationLock.unlock()
-        deadline?.cancel()
+        awaitsTrackedFrame = false
         if let error {
             confirmation?.finish(.failure(error))
         } else {
@@ -661,22 +685,36 @@ public class Device: NSObject, @unchecked Sendable {
         }
     }
 
-    private func failFrameTransmission(_ error: AidlabError) {
+    private func failFrameTransmission(_ error: AidlabError, reason: DisconnectReason = .unknownError) {
         chunkQueue.removeAll(keepingCapacity: false)
         readyForNextChunk = true
-        completeFrameConfirmation(error: error)
+        rejectFrame(error)
         deviceDelegate?.didReceiveError(self, error: error)
+        resetSession(reason)
+    }
+
+    /// Ends a session that the SDK cannot continue, so that didDisconnect reports why.
+    private func resetSession(_ reason: DisconnectReason) {
+        resetReason = reason
         transport.disconnect()
     }
 
+    /// Fails the frame in flight and the command that waits for it.
+    private func rejectFrame(_ error: AidlabError) {
+        refuseFrame(error)
+        completePendingProcessTermination(.failure(error))
+    }
+
+    /// Fails a frame that the device refused. A process that ends before the frame reaches it refuses the frame, so
+    /// its termination still answers a command addressed to it.
+    private func refuseFrame(_ error: AidlabError) {
+        completeFrameConfirmation(error: error)
+        completePendingProcessCommand(.failure(error))
+    }
+
     private func frameConfirmationDidTimeout(generation: UInt64) {
-        frameConfirmationLock.lock()
-        guard awaitingFrameConfirmation, frameConfirmationGeneration == generation else {
-            frameConfirmationLock.unlock()
-            return
-        }
-        frameConfirmationLock.unlock()
-        failFrameTransmission(AidlabError(message: "BLE frame confirmation timed out"))
+        guard awaitingFrameConfirmation, frameConfirmationGeneration == generation else { return }
+        failFrameTransmission(AidlabError(code: .transport, message: "BLE frame confirmation timed out"), reason: .timeout)
     }
 
     private struct SystemProcessResult {
@@ -691,18 +729,28 @@ public class Device: NSObject, @unchecked Sendable {
 
     private final class PendingProcessCommand: @unchecked Sendable {
         let continuation: CheckedContinuation<SystemProcessResult?, Error>
+        let startedProcessId: UInt8?
         let spawnedProcessId: UInt8?
         var responseReceived: Bool
         var response: SystemProcessResult?
 
         init(
             continuation: CheckedContinuation<SystemProcessResult?, Error>,
+            startedProcessId: UInt8?,
             spawnedProcessId: UInt8?,
             responseReceived: Bool
         ) {
             self.continuation = continuation
+            self.startedProcessId = startedProcessId
             self.spawnedProcessId = spawnedProcessId
             self.responseReceived = responseReceived
+        }
+
+        /// Whether a create lifecycle belongs to this command rather than to a raw payload sent before it.
+        func answers(_ result: SystemProcessResult) -> Bool {
+            // A shell-level create_failure names no process.
+            guard let startedProcessId, let processId = result.processId else { return true }
+            return processId == startedProcessId
         }
     }
 
@@ -716,19 +764,24 @@ public class Device: NSObject, @unchecked Sendable {
         }
     }
 
-    private func sendProcessCommand(
+    @MainActor
+    func sendProcessCommand(
         _ payload: [UInt8],
         timeoutSeconds: TimeInterval = 6,
+        startedProcessId: UInt8? = nil,
         spawnedProcessId: UInt8? = nil,
-        destinationPid: UInt16 = 0
+        destinationPid: UInt16 = 0,
+        raw: Bool = false
     ) async throws -> UInt16? {
         await processCommandGate.lock()
         do {
             let pid = try await sendProcessCommandLocked(
                 payload,
                 timeoutSeconds: timeoutSeconds,
+                startedProcessId: startedProcessId,
                 spawnedProcessId: spawnedProcessId,
-                destinationPid: destinationPid
+                destinationPid: destinationPid,
+                raw: raw
             )
             await processCommandGate.unlock()
             return pid
@@ -738,11 +791,14 @@ public class Device: NSObject, @unchecked Sendable {
         }
     }
 
-    private func sendProcessCommandLocked(
+    @MainActor
+    func sendProcessCommandLocked(
         _ payload: [UInt8],
         timeoutSeconds: TimeInterval,
+        startedProcessId: UInt8?,
         spawnedProcessId: UInt8?,
-        destinationPid: UInt16
+        destinationPid: UInt16,
+        raw: Bool
     ) async throws -> UInt16? {
         guard let aidlabSDK else {
             throw AidlabError(message: "Device is not connected")
@@ -751,32 +807,32 @@ public class Device: NSObject, @unchecked Sendable {
             throw AidlabError(message: "Previous BLE frame is not confirmed")
         }
 
-        let expectsShellResponse = destinationPid == 0
+        // Firmware before 2.2.18 answers commands without a process lifecycle. A raw payload leaves the lifecycle to
+        // the delegate: a builtin such as kill or a control byte starts no process.
+        let expectsShellResponse = destinationPid == 0 && !raw && hasProcesses()
         let waitsForLifecycle = expectsShellResponse || spawnedProcessId != nil
         let result: SystemProcessResult? = try await withCheckedThrowingContinuation { continuation in
             let waiter = PendingProcessCommand(
                 continuation: continuation,
+                startedProcessId: startedProcessId,
                 spawnedProcessId: spawnedProcessId,
                 responseReceived: !expectsShellResponse
             )
 
             if waitsForLifecycle {
-                commandStateLock.lock()
                 if pendingProcessCommand != nil {
-                    commandStateLock.unlock()
                     let error = AidlabError(message: "Another process command is already pending")
                     completeFrameConfirmation(error: error)
                     continuation.resume(throwing: error)
                     return
                 }
                 pendingProcessCommand = waiter
-                commandStateLock.unlock()
             }
 
             var bytes = payload
             guard emitTrackedFrame({
-                if expectsShellResponse {
-                    AidlabSDK_send(&bytes, Int32(bytes.count), 0, aidlabSDK)
+                if destinationPid == 0 || raw {
+                    AidlabSDK_send(&bytes, Int32(bytes.count), Int32(destinationPid), aidlabSDK)
                 } else {
                     AidlabSDK_send_process_command(
                         &bytes,
@@ -786,18 +842,19 @@ public class Device: NSObject, @unchecked Sendable {
                     )
                 }
             }) else {
+                // A local rejection fails only this command; the session remains usable.
                 let error = AidlabError(message: "SDK rejected the BLE frame")
+                completeFrameConfirmation(error: error)
                 if waitsForLifecycle {
                     completePendingProcessCommand(.failure(error), waiter: waiter)
                 } else {
                     continuation.resume(throwing: error)
                 }
-                failFrameTransmission(error)
                 return
             }
 
             if waitsForLifecycle {
-                DispatchQueue.global().asyncAfter(deadline: .now() + timeoutSeconds) { [weak self, weak waiter] in
+                DispatchQueue.main.asyncAfter(deadline: .now() + timeoutSeconds) { [weak self, weak waiter] in
                     guard let self, let waiter else { return }
                     completePendingProcessCommand(
                         .failure(AidlabError(message: "Timed out waiting for process command result")),
@@ -810,13 +867,17 @@ public class Device: NSObject, @unchecked Sendable {
         }
 
         try await frameConfirmation.wait()
-        if !expectsShellResponse {
+        if destinationPid != 0 {
             return destinationPid
         }
         guard let result else { return nil }
-        return result.accepted ? result.pid : nil
+        guard result.accepted else {
+            throw AidlabError(message: "Device refused to start the process")
+        }
+        return result.pid
     }
 
+    @MainActor
     private func sendActiveProcessCommand(
         _ payload: [UInt8],
         pid: UInt16,
@@ -830,62 +891,67 @@ public class Device: NSObject, @unchecked Sendable {
             guard let frameConfirmation = beginFrameConfirmation() else {
                 throw AidlabError(message: "Previous BLE frame is not confirmed")
             }
-            let result: SystemProcessResult = try await withCheckedThrowingContinuation { continuation in
-                let waiter = PendingProcessTermination(pid: pid, continuation: continuation)
+            let result: SystemProcessResult
+            do {
+                result = try await withCheckedThrowingContinuation { continuation in
+                    let waiter = PendingProcessTermination(pid: pid, continuation: continuation)
 
-                commandStateLock.lock()
-                if pendingProcessTermination != nil {
-                    commandStateLock.unlock()
-                    let error = AidlabError(message: "Another process termination is pending")
-                    completeFrameConfirmation(error: error)
-                    continuation.resume(throwing: error)
-                    return
-                }
-                pendingProcessTermination = waiter
-                commandStateLock.unlock()
+                    if pendingProcessTermination != nil {
+                        let error = AidlabError(message: "Another process termination is pending")
+                        completeFrameConfirmation(error: error)
+                        continuation.resume(throwing: error)
+                        return
+                    }
+                    pendingProcessTermination = waiter
 
-                var bytes = payload
-                guard emitTrackedFrame({
-                    AidlabSDK_send_process_command(&bytes, Int32(bytes.count), Int32(pid), aidlabSDK)
-                }) else {
-                    let error = AidlabError(message: "SDK rejected the BLE frame")
-                    completePendingProcessTermination(.failure(error), waiter: waiter)
-                    failFrameTransmission(error)
-                    return
-                }
+                    var bytes = payload
+                    guard emitTrackedFrame({
+                        AidlabSDK_send_process_command(&bytes, Int32(bytes.count), Int32(pid), aidlabSDK)
+                    }) else {
+                        let error = AidlabError(message: "SDK rejected the BLE frame")
+                        completeFrameConfirmation(error: error)
+                        completePendingProcessTermination(.failure(error), waiter: waiter)
+                        return
+                    }
 
-                DispatchQueue.global().asyncAfter(deadline: .now() + timeoutSeconds) { [weak self, weak waiter] in
-                    guard let self, let waiter else { return }
-                    completePendingProcessTermination(
-                        .failure(AidlabError(message: "Timed out waiting for process termination")),
-                        waiter: waiter
-                    )
+                    DispatchQueue.main.asyncAfter(deadline: .now() + timeoutSeconds) { [weak self, weak waiter] in
+                        guard let self, let waiter else { return }
+                        completePendingProcessTermination(
+                            .failure(AidlabError(message: "Timed out waiting for process termination")),
+                            waiter: waiter
+                        )
+                    }
                 }
+            } catch {
+                // A refused frame explains a missing termination better than the timeout.
+                try await frameConfirmation.wait()
+                throw error
             }
-            try await frameConfirmation.wait()
+            do {
+                try await frameConfirmation.wait()
+            } catch {
+                // A process that ends before the frame reaches it refuses the frame; its termination still answers
+                // the command.
+                guard result.status == Device.systemKillSuccess else { throw error }
+            }
             await processCommandGate.unlock()
-            return result.status == Device.systemKillSuccess ? pid : nil
+            if result.status == Device.systemKillSuccess {
+                return pid
+            }
         } catch {
             await processCommandGate.unlock()
             throw error
         }
+        throw AidlabError(message: "Device refused to stop process \(pid)")
     }
 
     private func completePendingProcessCommand(
         _ result: Result<SystemProcessResult?, Error>,
         waiter expectedWaiter: PendingProcessCommand? = nil
     ) {
-        commandStateLock.lock()
-        guard let waiter = pendingProcessCommand else {
-            commandStateLock.unlock()
-            return
-        }
-        if let expectedWaiter, waiter !== expectedWaiter {
-            commandStateLock.unlock()
-            return
-        }
+        guard let waiter = pendingProcessCommand else { return }
+        if let expectedWaiter, waiter !== expectedWaiter { return }
         pendingProcessCommand = nil
-        commandStateLock.unlock()
 
         switch result {
         case let .success(value):
@@ -899,17 +965,9 @@ public class Device: NSObject, @unchecked Sendable {
         _ result: Result<SystemProcessResult, Error>,
         waiter expectedWaiter: PendingProcessTermination? = nil
     ) {
-        commandStateLock.lock()
-        guard let waiter = pendingProcessTermination else {
-            commandStateLock.unlock()
-            return
-        }
-        if let expectedWaiter, waiter !== expectedWaiter {
-            commandStateLock.unlock()
-            return
-        }
+        guard let waiter = pendingProcessTermination else { return }
+        if let expectedWaiter, waiter !== expectedWaiter { return }
         pendingProcessTermination = nil
-        commandStateLock.unlock()
 
         switch result {
         case let .success(value): waiter.continuation.resume(returning: value)
@@ -922,31 +980,26 @@ public class Device: NSObject, @unchecked Sendable {
             return
         }
         var commandCompletion: (PendingProcessCommand, Result<SystemProcessResult?, Error>)?
-        commandStateLock.lock()
         updateActiveProcessPids(result)
         let terminationWaiter = pendingProcessTermination
         if result.status == Device.systemCreateSuccess || result.status == Device.systemCreateFailure,
            let waiter = pendingProcessCommand {
             if !waiter.responseReceived {
-                waiter.responseReceived = true
-                waiter.response = result
-                if !result.accepted || waiter.spawnedProcessId == nil {
-                    pendingProcessCommand = nil
-                    commandCompletion = (waiter, .success(result))
+                if waiter.answers(result) {
+                    waiter.responseReceived = true
+                    waiter.response = result
+                    if !result.accepted || waiter.spawnedProcessId == nil {
+                        pendingProcessCommand = nil
+                        commandCompletion = (waiter, .success(result))
+                    }
                 }
             } else if result.status == Device.systemCreateFailure || result.processId == waiter.spawnedProcessId {
+                // Firmware 3.7.84-3.7.110 starts a sync with collect and refuses it while another sync runs; the
+                // collect succeeded either way.
                 pendingProcessCommand = nil
-                if result.accepted {
-                    commandCompletion = (waiter, .success(waiter.response))
-                } else {
-                    commandCompletion = (
-                        waiter,
-                        .failure(AidlabError(message: "Firmware rejected required spawned process"))
-                    )
-                }
+                commandCompletion = (waiter, .success(waiter.response))
             }
         }
-        commandStateLock.unlock()
 
         if let (waiter, completion) = commandCompletion {
             switch completion {
@@ -962,18 +1015,16 @@ public class Device: NSObject, @unchecked Sendable {
     }
 
     private func updateActiveProcessPids(_ result: SystemProcessResult) {
-        guard let processId = result.processId else { return }
-        if result.status == Device.systemCreateSuccess {
+        if result.status == Device.systemCreateSuccess, let processId = result.processId {
             activeProcessPids[processId] = result.pid
-        } else if result.status == Device.systemKillSuccess, activeProcessPids[processId] == result.pid {
-            activeProcessPids.removeValue(forKey: processId)
+        } else if result.status == Device.systemKillSuccess {
+            // Firmware before 3.7.113 reports an ended collect process with a wrong process ID; the PID is unique.
+            activeProcessPids = activeProcessPids.filter { $0.value != result.pid }
         }
     }
 
     private func activePid(for processId: UInt8) -> UInt16? {
-        commandStateLock.lock()
-        defer { commandStateLock.unlock() }
-        return activeProcessPids[processId]
+        activeProcessPids[processId]
     }
 
     private func parseSystemProcessInformation(process: String, payload: Data) -> SystemProcessResult? {
@@ -995,35 +1046,6 @@ public class Device: NSObject, @unchecked Sendable {
         return SystemProcessResult(status: status, pid: pid, processId: processId)
     }
 
-    private func startLegacyCollection(dataTypes: [DataType]) {
-        stopLegacyCollection()
-        var uuids: Set<CBUUID> = []
-        for dataType in dataTypes {
-            if let uuid = dataTypesUUID[dataType] {
-                uuids.insert(uuid)
-            }
-        }
-
-        for uuid in uuids {
-            legacyCollectionNotificationUUIDs.insert(uuid)
-            startNotify(
-                uuid: uuid,
-                required: false,
-                onData: { [weak self] data in
-                    self?.processLegacyData(uuid: uuid, data: data)
-                }
-            )
-        }
-    }
-
-    private func stopLegacyCollection() {
-        for uuid in legacyCollectionNotificationUUIDs {
-            transport.stopNotifications(uuid)
-            activeNotificationUUIDs.remove(uuid)
-        }
-        legacyCollectionNotificationUUIDs.removeAll(keepingCapacity: false)
-    }
-
     private func processCommandChunk(_ data: Data) {
         guard let aidlabSDK else { return }
         var scratchVal = [UInt8](data)
@@ -1034,40 +1056,6 @@ public class Device: NSObject, @unchecked Sendable {
         guard aidlabSDK != nil else { return }
         var scratchVal = [UInt8](data)
         AidlabSDK_process_battery_package(&scratchVal, Int32(scratchVal.count), aidlabSDK)
-    }
-
-    private func processLegacyData(
-        uuid: CBUUID,
-        data: Data
-    ) {
-        guard aidlabSDK != nil else { return }
-        var scratchVal = [UInt8](data)
-        let count = Int32(scratchVal.count)
-
-        switch uuid {
-        case temperatureCharacteristicUUID:
-            processTemperaturePackage(&scratchVal, count, aidlabSDK)
-        case ecgCharacteristicUUID:
-            processECGPackage(&scratchVal, count, aidlabSDK)
-        case respirationCharacteristicUUID:
-            processRespirationPackage(&scratchVal, count, aidlabSDK)
-        case motionCharacteristicUUID:
-            processMotionPackage(&scratchVal, count, aidlabSDK)
-        case soundVolumeCharacteristicUUID:
-            processSoundVolumePackage(&scratchVal, count, aidlabSDK)
-        case MotionService.stepsUUID:
-            processStepsPackage(&scratchVal, count, aidlabSDK)
-        case MotionService.activityUUID:
-            processActivityPackage(&scratchVal, count, aidlabSDK)
-        case MotionService.orientationUUID:
-            processOrientationPackage(&scratchVal, count, aidlabSDK)
-        case HeartRateService.heartRateMeasurementCharacteristic:
-            processHeartRatePackage(&scratchVal, count, aidlabSDK)
-        case BatteryLevelService.batteryLevelCharacteristic, batteryCharacteristicUUID:
-            AidlabSDK_process_battery_package(&scratchVal, count, aidlabSDK)
-        default:
-            break
-        }
     }
 
     func drainChunkQueue() {
@@ -1082,18 +1070,21 @@ public class Device: NSObject, @unchecked Sendable {
             withResponse: !usesV4Protocol()
         ) { [weak self] result in
             guard let self else { return }
-            switch result {
-            case .success:
-                handleCommandWriteResult(error: nil, completesFrame: chunk.completesFrame)
-            case let .failure(error):
-                handleCommandWriteResult(error: error, completesFrame: chunk.completesFrame)
+            let completesFrame = chunk.completesFrame
+            onMainQueue {
+                switch result {
+                case .success:
+                    self.handleCommandWriteResult(error: nil, completesFrame: completesFrame)
+                case let .failure(error):
+                    self.handleCommandWriteResult(error: error, completesFrame: completesFrame)
+                }
             }
         }
     }
 
     func handleCommandWriteResult(error: Error?, completesFrame: Bool) {
         if let error {
-            failFrameTransmission(AidlabError.wrapping(error))
+            failFrameTransmission(AidlabError(code: .transport, message: error.localizedDescription, underlyingError: error))
             return
         }
 
@@ -1120,6 +1111,12 @@ public class Device: NSObject, @unchecked Sendable {
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
         self_.completeFrameConfirmation()
+    }
+
+    private let bleFrameResultCallback: callbackBLEFrameResult = { context, result in
+        guard let context, result != 0 else { return }
+        let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
+        self_.refuseFrame(AidlabError(message: "Device rejected the frame with NAK code \(result)"))
     }
 
     private let didReceiveECG: callbackSampleTime = { context, timestamp, value in
@@ -1263,6 +1260,9 @@ public class Device: NSObject, @unchecked Sendable {
         }
 
         self_.handleProcessCommandPayload(process: processString, payload: rawPayload)
+        if rawPayload == Device.legacyCommandReceived {
+            self_.legacyCommandConfirmation?.finish(.success(()))
+        }
         self_.deviceDelegate?.didReceivePayload(self_, process: processString, payload: rawPayload, options: options)
     }
 
@@ -1295,14 +1295,17 @@ public class Device: NSObject, @unchecked Sendable {
         else { return }
 
         let error = AidlabError.fromCore(rawCode: Int32(code.rawValue), message: string)
-        self_.completeFrameConfirmation(error: error)
         self_.deviceDelegate?.didReceiveError(self_, error: error)
+        if error.code == .protocol {
+            // The session is unreliable; reset it once the core call that reported the error returns.
+            DispatchQueue.main.async { self_.resetSession(.unknownError) }
+        }
     }
 
     private let didReceiveSignalQuality: callbackSignalQuality = { context, timestamp, value in
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceiveSignalQuality(self_, timestamp: timestamp, value: Int32(value))
+        self_.deviceDelegate?.didReceiveSignalQuality(self_, timestamp: timestamp, value: value)
     }
 
     private let didReceiveBatteryLevel: callbackBatteryLevel = { context, stateOfCharge in
@@ -1453,6 +1456,6 @@ public class Device: NSObject, @unchecked Sendable {
     private let didReceivePastSignalQuality: callbackSignalQuality = { context, timestamp, value in
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceivePastSignalQuality(self_, timestamp: timestamp, value: UInt8(value))
+        self_.deviceDelegate?.didReceivePastSignalQuality(self_, timestamp: timestamp, value: value)
     }
 }

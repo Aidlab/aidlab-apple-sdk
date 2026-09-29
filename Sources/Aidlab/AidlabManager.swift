@@ -6,11 +6,15 @@
 import CoreBluetooth
 import Foundation
 
+/// Why a session ended.
 public enum DisconnectReason: Int, Sendable {
+    /// The device did not confirm a frame in time, so the SDK ended the session.
     case timeout = 0
+    /// The link dropped.
     case deviceDisconnected = 1
+    /// The app called ``Device/disconnect()``.
     case appDisconnected = 2
-    case sdkOutdated = 3
+    /// The SDK ended the session after a failed write, a protocol error or a failed connection.
     case unknownError = 4
 }
 
@@ -56,6 +60,12 @@ public final class AidlabManager: NSObject, CBCentralManagerDelegate {
 
     public func centralManagerDidUpdateState(_ central: CBCentralManager) {
         updateBluetoothState(from: central)
+        if !isPowerOn(central: central) {
+            // Turning Bluetooth off drops every connection without a didDisconnectPeripheral callback.
+            for device in discoveredDevices.values {
+                device.notifyDidDisconnect(error: nil)
+            }
+        }
         if shouldScan, isPowerOn(central: central) {
             scan(scanMode: scanMode)
         }
