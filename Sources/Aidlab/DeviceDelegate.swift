@@ -44,10 +44,6 @@ public protocol DeviceDelegate: AnyObject {
 
     func didReceiveSoundVolume(_ device: Device, timestamp: UInt64, soundVolume: UInt16)
 
-    func didDetectExercise(_ device: Device, exercise: Exercise)
-
-    func didReceiveActivity(_ device: Device, timestamp: UInt64, activity: ActivityType)
-
     func didDisconnect(_ device: Device, reason: DisconnectReason)
 
     func didConnect(_ device: Device)
@@ -55,29 +51,24 @@ public protocol DeviceDelegate: AnyObject {
     func didReceiveError(_ device: Device, error: AidlabError)
 
     func didUpdateRSSI(_ device: Device, rssi: Int32)
-    /**
-     * Called when a significant change of wear state did occur. You can use
-     * that information to make decisions when to start processing data, or
-     * display short user guide how to wear Aidlab in your app.
-     * @param  wearState    Current wear state.
-     */
-    func wearStateDidChange(_ device: Device, wearState: WearState)
 
-    /// Called when a payload was received from a process (raw bytes).
+    /// Called with wear-state changes, user events, exercises, activities and on-device ECG and sleep analysis, live
+    /// and from synchronization. Later SDK versions may add event types, so ignore the types you do not handle.
+    func didReceiveEvent(_ device: Device, event: any DeviceEvent)
+
+    /// Called with each payload chunk received from a process (raw bytes).
     /// - Parameters:
     ///   - device: The Aidlab device instance
-    ///   - process: The process name that sent the payload (e.g., "ping", "sync", "system")
+    ///   - pid: Runtime process ID; 0 for system output or protocols without process IDs
     ///   - payload: Raw payload data as Data
-    ///   - options: Process-specific metadata. Built-in metadata uses dedicated SDK callbacks.
-    func didReceivePayload(_ device: Device, process: String, payload: Data, options: UInt64)
+    ///   - options: Process-specific metadata received from the device
+    func didReceivePayload(_ device: Device, pid: UInt16, payload: Data, options: UInt64)
 
     /// Called with stderr emitted by a device process. Aidlab 1 does not emit this callback.
-    func didReceiveProcessError(_ device: Device, process: String, pid: UInt16, payload: Data, options: UInt64)
+    func didReceiveProcessError(_ device: Device, pid: UInt16, payload: Data, options: UInt64)
 
     /// Called after the device reports that a runtime process has terminated.
     func processDidTerminate(_ device: Device, pid: UInt16)
-
-    func didDetectUserEvent(_ device: Device, timestamp: UInt64)
 
     func didReceiveSignalQuality(_ device: Device, timestamp: UInt64, value: UInt8)
 
@@ -97,8 +88,6 @@ public protocol DeviceDelegate: AnyObject {
     func didReceiveUnsynchronizedSize(_ device: Device, unsynchronizedSize: UInt32, syncBytesPerSecond: Float)
 
     func didReceivePastRespirationRate(_ device: Device, timestamp: UInt64, value: UInt32)
-
-    func didReceivePastActivity(_ device: Device, timestamp: UInt64, activity: ActivityType)
 
     func didReceivePastSteps(_ device: Device, timestamp: UInt64, value: UInt64)
 
@@ -124,16 +113,55 @@ public protocol DeviceDelegate: AnyObject {
 
     func didReceivePastPressure(_ device: Device, timestamp: UInt64, value: Int32)
 
-    func didDetectPastUserEvent(_ device: Device, timestamp: UInt64)
-
     func didReceivePastSignalQuality(_ device: Device, timestamp: UInt64, value: UInt8)
-
-    func pressureWearStateDidChange(_ device: Device, wearState: WearState)
 
     func didReceivePressure(_ device: Device, timestamp: UInt64, value: Int32)
 }
 
+// Every callback except didConnect, didDisconnect and didReceiveError is optional.
 public extension DeviceDelegate {
+    func didReceiveECG(_: Device, timestamp _: UInt64, value _: Float) {}
+    func didReceiveRespiration(_: Device, timestamp _: UInt64, value _: Float) {}
+    func didReceiveBatteryLevel(_: Device, stateOfCharge _: UInt8) {}
+    func didReceiveSteps(_: Device, timestamp _: UInt64, value _: UInt64) {}
+    func didReceiveSkinTemperature(_: Device, timestamp _: UInt64, value _: Float) {}
+    func didReceiveAccelerometer(_: Device, timestamp _: UInt64, ax _: Float, ay _: Float, az _: Float) {}
+    func didReceiveGyroscope(_: Device, timestamp _: UInt64, gx _: Float, gy _: Float, gz _: Float) {}
+    func didReceiveMagnetometer(_: Device, timestamp _: UInt64, mx _: Float, my _: Float, mz _: Float) {}
+    func didReceiveQuaternion(_: Device, timestamp _: UInt64, qw _: Float, qx _: Float, qy _: Float, qz _: Float) {}
+    func didReceiveOrientation(_: Device, timestamp _: UInt64, roll _: Float, pitch _: Float, yaw _: Float) {}
+    func didReceiveEDA(_: Device, timestamp _: UInt64, conductance _: Float) {}
+    func didReceiveGPS(_: Device, timestamp _: UInt64, latitude _: Double, longitude _: Double, altitude _: Double, speed _: Float, heading _: Float, hdop _: Float) {}
+    func didReceiveBodyPosition(_: Device, timestamp _: UInt64, bodyPosition _: BodyPosition) {}
+    func didReceiveHeartRate(_: Device, timestamp _: UInt64, heartRate _: Int32) {}
+    func didReceiveRr(_: Device, timestamp _: UInt64, rr _: Int32) {}
+    func didReceiveRespirationRate(_: Device, timestamp _: UInt64, value _: UInt32) {}
+    func didReceiveSoundVolume(_: Device, timestamp _: UInt64, soundVolume _: UInt16) {}
+    func didUpdateRSSI(_: Device, rssi _: Int32) {}
+    func didReceiveEvent(_: Device, event _: any DeviceEvent) {}
+    func didReceivePayload(_: Device, pid _: UInt16, payload _: Data, options _: UInt64) {}
+    func didReceiveProcessError(_: Device, pid _: UInt16, payload _: Data, options _: UInt64) {}
     func processDidTerminate(_: Device, pid _: UInt16) {}
-    func didReceiveProcessError(_: Device, process _: String, pid _: UInt16, payload _: Data, options _: UInt64) {}
+    func didReceiveSignalQuality(_: Device, timestamp _: UInt64, value _: UInt8) {}
+    func syncStateDidChange(_: Device, state _: SyncState) {}
+    func didReceivePastECG(_: Device, timestamp _: UInt64, value _: Float) {}
+    func didReceivePastRespiration(_: Device, timestamp _: UInt64, value _: Float) {}
+    func didReceivePastSkinTemperature(_: Device, timestamp _: UInt64, value _: Float) {}
+    func didReceivePastHeartRate(_: Device, timestamp _: UInt64, heartRate _: Int32) {}
+    func didReceivePastRr(_: Device, timestamp _: UInt64, rr _: Int32) {}
+    func didReceiveUnsynchronizedSize(_: Device, unsynchronizedSize _: UInt32, syncBytesPerSecond _: Float) {}
+    func didReceivePastRespirationRate(_: Device, timestamp _: UInt64, value _: UInt32) {}
+    func didReceivePastSteps(_: Device, timestamp _: UInt64, value _: UInt64) {}
+    func didReceivePastSoundVolume(_: Device, timestamp _: UInt64, soundVolume _: UInt16) {}
+    func didReceivePastAccelerometer(_: Device, timestamp _: UInt64, ax _: Float, ay _: Float, az _: Float) {}
+    func didReceivePastGyroscope(_: Device, timestamp _: UInt64, gx _: Float, gy _: Float, gz _: Float) {}
+    func didReceivePastMagnetometer(_: Device, timestamp _: UInt64, mx _: Float, my _: Float, mz _: Float) {}
+    func didReceivePastQuaternion(_: Device, timestamp _: UInt64, qw _: Float, qx _: Float, qy _: Float, qz _: Float) {}
+    func didReceivePastOrientation(_: Device, timestamp _: UInt64, roll _: Float, pitch _: Float, yaw _: Float) {}
+    func didReceivePastEDA(_: Device, timestamp _: UInt64, conductance _: Float) {}
+    func didReceivePastGPS(_: Device, timestamp _: UInt64, latitude _: Double, longitude _: Double, altitude _: Double, speed _: Float, heading _: Float, hdop _: Float) {}
+    func didReceivePastBodyPosition(_: Device, timestamp _: UInt64, bodyPosition _: BodyPosition) {}
+    func didReceivePastPressure(_: Device, timestamp _: UInt64, value _: Int32) {}
+    func didReceivePastSignalQuality(_: Device, timestamp _: UInt64, value _: UInt8) {}
+    func didReceivePressure(_: Device, timestamp _: UInt64, value _: Int32) {}
 }

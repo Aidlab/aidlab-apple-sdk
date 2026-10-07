@@ -6,7 +6,7 @@
 import AidlabSDK
 import Foundation
 
-public enum WearState {
+public enum WearState: Sendable {
     init(wearState: AidlabSDK.WearState) {
         switch wearState {
         case AidlabSDK.wearStatePlacedProperly:

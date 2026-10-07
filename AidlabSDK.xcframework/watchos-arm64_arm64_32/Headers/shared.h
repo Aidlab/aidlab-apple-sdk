@@ -49,8 +49,7 @@ typedef enum {
     exerciseBurpee = 3,
     exercisePullUp = 4,
     exerciseSquat = 5,
-    exercisePlankStart = 6,
-    exercisePlankEnd = 7
+    exercisePlank = 6
 
 } Exercise;
 
@@ -95,31 +94,70 @@ typedef enum {
     bodyPositionRightSide = 4
 } BodyPosition;
 
-typedef void (*callbackSampleTime)(void*, uint64_t, float);
-typedef void (*callbackActivity)(void*, uint64_t, ActivityType);
-typedef void (*callbackRespirationRate)(void*, uint64_t, uint32_t);
-typedef void (*callbackSteps)(void*, uint64_t, uint64_t);
+typedef enum {
+    /// The wear state of the chest electrodes changed. `code` is the new WearState.
+    eventTypeWearState = 0,
+    /// The wear state of the nasal cannula (Aidmed One) changed. `code` is the new WearState.
+    eventTypePressureWearState = 1,
+    /// The wearer marked a moment, for example with the device button. `code` is 0.
+    eventTypeUser = 2,
+    /// The SDK detected an exercise. `code` is the Exercise.
+    eventTypeExercise = 3,
+    /// The wearer was doing an activity. `code` is the ActivityType.
+    eventTypeActivity = 4,
+    /// One WFDB annotation of the device's ECG analysis, listed in the events to detect of collect. `code` is the WFDB
+    /// `anntyp`. A beat is a moment at its R peak: 1 normal (N), 5 premature ventricular contraction (V),
+    /// 9 supraventricular premature beat (S) or 13 unclassifiable (Q), with the probability of that class as
+    /// `confidence`. A rhythm or noise change is a period, reported once it ends: 28 (rhythm) with `aux` "(AFIB"
+    /// (atrial fibrillation) or "(SBR" (sinus bradycardia), or 14 (noise), whose `subtyp` marks unreadable signals in
+    /// its high four bits and noisy ones in its low four bits; the period ends at the return to "(N" or to `subtyp` 0.
+    eventTypeEcg = 5,
+    /// A period of a night analyzed by the device, listed in the events to detect of collect. `code` is 0 for the night
+    /// from sleep onset to the final wake, or its stage: 1 wake, 2 light, 3 deep or 4 REM.
+    eventTypeSleep = 6
+} EventType;
+
+/// An event that happened at a moment or over a period. Its identity is `type`, `timestamp`, `code` and `aux`; a later
+/// event with the same identity updates the earlier one. A period that is still going on is reported with
+/// `endTimestamp` 0, and again with its end once it ends. A period may stay open, for example after a power loss.
+/// An event read through synchronization (`past` true) updates the same event reported live.
+/// Later versions may append fields, so read it through the pointer the SDK passes and do not copy or allocate it.
+typedef struct {
+    uint32_t type;          // EventType
+    int32_t code;           // Meaning depends on the type
+    uint64_t timestamp;     // Start, Unix time in milliseconds
+    uint64_t endTimestamp;  // End, equal to `timestamp` for a moment and 0 while the period lasts
+    float confidence;       // From 0 to 1, or negative when the detector reports none
+    uint32_t modelVersion;  // Model of an on-device analysis, major << 24 | minor << 16 | revision; 0 for none
+    const char* aux;        // WFDB `aux`, a NUL-terminated ASCII string, or null when the event has none
+    int8_t subtyp;          // WFDB `subtyp`, 0 when the event has none
+} AidlabEvent;
+
+/// Data callbacks take `past` after the context: false for live data, true for data read from internal memory
+/// through synchronization.
+typedef void (*callbackSampleTime)(void*, bool, uint64_t, float);
+typedef void (*callbackRespirationRate)(void*, bool, uint64_t, uint32_t);
+typedef void (*callbackSteps)(void*, bool, uint64_t, uint64_t);
 typedef void (*callbackBatteryLevel)(void*, uint8_t);
-typedef void (*callbackWearState)(void*, WearState);
-typedef void (*callbackAccelerometer)(void*, uint64_t, float, float, float);
-typedef void (*callbackGyroscope)(void*, uint64_t, float, float, float);
-typedef void (*callbackMagnetometer)(void*, uint64_t, float, float, float);
-typedef void (*callbackOrientation)(void*, uint64_t, float, float, float);
-typedef void (*callbackBodyPosition)(void*, uint64_t, BodyPosition);
-typedef void (*callbackQuaternion)(void*, uint64_t, float, float, float, float);
-typedef void (*callbackHeartRate)(void*, uint64_t, int);
-typedef void (*callbackRr)(void*, uint64_t, int);
-typedef void (*callbackSoundVolume)(void*, uint64_t, uint16_t);
-typedef void (*callbackPressure)(void*, uint64_t, int);
-typedef void (*callbackSignalQuality)(void*, uint64_t, uint8_t);
-typedef void (*callbackEda)(void*, uint64_t, float);  // timestamp, conductance (µS)
-typedef void (*callbackGps)(void*, uint64_t, float, float, float, float, float,
+typedef void (*callbackAccelerometer)(void*, bool, uint64_t, float, float, float);
+typedef void (*callbackGyroscope)(void*, bool, uint64_t, float, float, float);
+typedef void (*callbackMagnetometer)(void*, bool, uint64_t, float, float, float);
+typedef void (*callbackOrientation)(void*, bool, uint64_t, float, float, float);
+typedef void (*callbackBodyPosition)(void*, bool, uint64_t, BodyPosition);
+typedef void (*callbackQuaternion)(void*, bool, uint64_t, float, float, float, float);
+typedef void (*callbackHeartRate)(void*, bool, uint64_t, int);
+typedef void (*callbackRr)(void*, bool, uint64_t, int);
+typedef void (*callbackSoundVolume)(void*, bool, uint64_t, uint16_t);
+typedef void (*callbackPressure)(void*, bool, uint64_t, int);
+typedef void (*callbackSignalQuality)(void*, bool, uint64_t, uint8_t);
+typedef void (*callbackEda)(void*, bool, uint64_t, float);  // timestamp, conductance (µS)
+typedef void (*callbackGps)(void*, bool, uint64_t, float, float, float, float, float,
                             float);  // timestamp, lat, lon, alt, speed (m/s), heading, hdop
 /// Remaining synchronization data in bytes and the transfer speed in bytes per second, or -1 while unknown.
 typedef void (*callbackUnsynchronizedSize)(void*, uint32_t, float);
 typedef void (*callbackSyncState)(void*, SyncState);
-typedef void (*callbackUserEvent)(void*, uint64_t);
-typedef void (*callback_function)(void*, Exercise);
+/// Events take `past` after the context, like data callbacks. The event is valid only during the call.
+typedef void (*callbackEvent)(void*, bool, const AidlabEvent*);
 
 ////////////////////////////////
 /// BLE Communication Callbacks ///
@@ -143,15 +181,16 @@ typedef void (*callbackBLEFrameResult)(void* context, uint8_t result);
 
 /// @brief Callback function type for receiving payloads from the device.
 /// This callback delivers the raw payload data after transport protocol headers are stripped.
-/// Process parameter indicates which device process originated the payload.
-/// Options contains process-specific metadata. Built-in metadata is exposed through dedicated SDK callbacks.
-typedef void (*callbackPayload)(void* context, const char* process, const uint8_t* payload, size_t payload_length,
+/// Options contains the process-specific metadata received from the device.
+/// A response may span multiple callbacks; callback boundaries do not define text lines.
+/// PID identifies the runtime process instance; legacy protocols without PIDs report zero.
+typedef void (*callbackPayload)(void* context, uint16_t pid, const uint8_t* payload, size_t payload_length,
                                 uint64_t options);
 
 /// @brief Callback invoked for stderr emitted by a device process.
 /// PID identifies the runtime process instance. Payload is raw process output and is not necessarily NUL-terminated.
-typedef void (*callbackProcessError)(void* context, const char* process, uint16_t pid, const uint8_t* payload,
-                                     size_t payload_length, uint64_t options);
+typedef void (*callbackProcessError)(void* context, uint16_t pid, const uint8_t* payload, size_t payload_length,
+                                     uint64_t options);
 
 /// @brief Callback function type for receiving typed SDK errors.
 /// Code is the public contract. Message is diagnostic-only and must not be parsed by consumers.
@@ -207,25 +246,30 @@ SHARED_EXPORT void* AidlabSDK_create(const uint8_t* fwRevision, int size);
 /// Should be called after disconnecting from the device.
 SHARED_EXPORT void AidlabSDK_destroy(void* aidlabSDK);
 
-/// Initializes the callbacks.
-SHARED_EXPORT void AidlabSDK_init_callbacks(
-    callbackSampleTime ecg, callbackSampleTime respiration, callbackSampleTime temperature,
-    callbackAccelerometer accelerometer, callbackGyroscope gyroscope, callbackMagnetometer magnetometer,
-    callbackBatteryLevel battery, callbackActivity activity, callbackSteps steps, callbackOrientation orientation,
-    callbackQuaternion quaternion, callbackRespirationRate respirationRate, callbackWearState wearState,
-    callbackHeartRate heartRate, callbackRr rr, callbackSoundVolume soundVolume, callback_function exercise,
-    callbackUserEvent userEvent, callbackPressure pressure, callbackWearState pressureWearState,
-    callbackBodyPosition bodyPosition, callbackSignalQuality signalQuality, void* aidlabSDK);
+/// Initializes the callbacks. Data and event callbacks receive both live and synchronized data.
+SHARED_EXPORT void AidlabSDK_init_callbacks(callbackSampleTime ecg, callbackSampleTime respiration,
+                                            callbackSampleTime temperature, callbackAccelerometer accelerometer,
+                                            callbackGyroscope gyroscope, callbackMagnetometer magnetometer,
+                                            callbackBatteryLevel battery, callbackSteps steps,
+                                            callbackOrientation orientation, callbackQuaternion quaternion,
+                                            callbackRespirationRate respirationRate, callbackHeartRate heartRate,
+                                            callbackRr rr, callbackSoundVolume soundVolume, callbackPressure pressure,
+                                            callbackBodyPosition bodyPosition, callbackSignalQuality signalQuality,
+                                            callbackEda eda, callbackGps gps, callbackEvent event, void* aidlabSDK);
 
-/// Initializes synchronization callbacks for historical data.
-SHARED_EXPORT void AidlabSDK_init_synchronization_callbacks(
-    callbackSyncState syncState, callbackUnsynchronizedSize unsynchronizedSize, callbackSampleTime pastEcg,
-    callbackSampleTime pastRespiration, callbackSampleTime pastTemperature, callbackHeartRate pastHeartRate,
-    callbackRr pastRr, callbackActivity pastActivity, callbackRespirationRate pastRespirationRate,
-    callbackSteps pastSteps, callbackUserEvent userEvent, callbackSoundVolume soundVolume, callbackPressure pressure,
-    callbackAccelerometer accelerometer, callbackGyroscope gyroscope, callbackQuaternion quaternion,
-    callbackOrientation orientation, callbackMagnetometer magnetometer, callbackBodyPosition bodyPosition,
-    callbackSignalQuality signalQuality, void* aidlabSDK);
+/// Returns the data types in `dataTypes` that the firmware of this device does not support. Both masks set bit `n` for
+/// the data type with value `n`, as the collect flags do. Reserved data types are never supported.
+SHARED_EXPORT uint64_t AidlabSDK_unsupported_data_types(uint64_t dataTypes, const void* aidlabSDK);
+
+/// Returns the event types in `events` that this device cannot detect itself. Both masks set bit `n` for the EventType
+/// with value `n`, as the third mask of `collect flags <live> <store> <events>` does. Only eventTypeEcg and
+/// eventTypeSleep have on-device detectors, on Aidlab 2 (firmware 4.0.0 and newer).
+SHARED_EXPORT uint64_t AidlabSDK_unsupported_events(uint64_t events, const void* aidlabSDK);
+
+/// Initializes the synchronization progress callbacks.
+SHARED_EXPORT void AidlabSDK_init_synchronization_callbacks(callbackSyncState syncState,
+                                                            callbackUnsynchronizedSize unsynchronizedSize,
+                                                            void* aidlabSDK);
 
 /// @brief Sets the context for callback identification.
 /// This function allows you to attach any custom object to the Aidlab SDK instance.
@@ -245,11 +289,6 @@ SHARED_EXPORT void AidlabSDK_set_process_error_callback(callbackProcessError cal
 /// Consumers should reset the connection/session before retrying application-level commands.
 /// Reset outside the callback: AidlabSDK_destroy must not run while the SDK is still inside the call that reported it.
 SHARED_EXPORT void AidlabSDK_set_error_callback(callbackError callback, void* context, void* aidlabSDK);
-
-SHARED_EXPORT void AidlabSDK_set_eda_callback(callbackEda eda, void* aidlabSDK);
-SHARED_EXPORT void AidlabSDK_set_gps_callback(callbackGps gps, void* aidlabSDK);
-SHARED_EXPORT void AidlabSDK_set_past_eda_callback(callbackEda eda, void* aidlabSDK);
-SHARED_EXPORT void AidlabSDK_set_past_gps_callback(callbackGps gps, void* aidlabSDK);
 
 /// @brief Sends payload to device. The public V4 send path requests transport ACK/NAK for every frame.
 /// Legacy Aidlab 1 transports (V1-V3) do not support protocol ACK/NAK; platform integrations must use GATT writes

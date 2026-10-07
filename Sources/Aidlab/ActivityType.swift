@@ -6,7 +6,7 @@
 import AidlabSDK
 import Foundation
 
-public enum ActivityType {
+public enum ActivityType: Sendable {
     init(activityType: AidlabSDK.ActivityType) {
         switch activityType {
         case AidlabSDK.activityTypeUnknown:

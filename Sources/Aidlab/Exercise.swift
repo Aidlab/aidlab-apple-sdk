@@ -6,7 +6,7 @@
 import AidlabSDK
 import Foundation
 
-public enum Exercise: Int {
+public enum Exercise: Int, Sendable {
     init(exercise: AidlabSDK.Exercise) {
         switch exercise {
         case AidlabSDK.exerciseNone:
@@ -23,10 +23,8 @@ public enum Exercise: Int {
             self = .pullUp
         case AidlabSDK.exerciseSquat:
             self = .squat
-        case AidlabSDK.exercisePlankStart:
-            self = .plankStart
-        case AidlabSDK.exercisePlankEnd:
-            self = .plankEnd
+        case AidlabSDK.exercisePlank:
+            self = .plank
         default:
             self = .none
         }
@@ -39,6 +37,6 @@ public enum Exercise: Int {
     case burpee = 3
     case pullUp = 4
     case squat = 5
-    case plankStart = 6
-    case plankEnd = 7
+    /// A period: reported when it starts and again when it ends.
+    case plank = 6
 }

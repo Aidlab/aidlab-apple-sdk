@@ -109,6 +109,8 @@ public class Device: NSObject, @unchecked Sendable {
     var activeNotificationUUIDs: Set<CBUUID> = []
     var legacyCollectionNotificationUUIDs: Set<CBUUID> = []
     private var didHandleDisconnect = false
+    private var didNotifyConnected = false
+    var pendingConnect: CheckedContinuation<Void, Error>?
     /// Reason for a disconnect that the SDK started; the transport reports it as an app disconnect.
     private var resetReason: DisconnectReason?
     let processCommandGate = ProcessCommandGate()
@@ -162,33 +164,46 @@ public class Device: NSObject, @unchecked Sendable {
         }
     }
 
-    public func connect(delegate: DeviceDelegate) {
+    /// Connects to the device and returns after `didConnect`.
+    ///
+    /// Throws when the connection cannot be established; `didDisconnect` follows only a connection that reached
+    /// `didConnect`.
+    public func connect(delegate: DeviceDelegate) async throws {
         nonisolated(unsafe) let delegate = delegate
-        onMainQueue { [self] in
-            deviceDelegate = delegate
-            resetBleQueue()
-            didHandleDisconnect = false
-            resetReason = nil
-            stopAllNotifications()
-
-            transport.onDisconnect = { [weak self] reason, error in
-                guard let self else { return }
-                onMainQueue {
-                    if let error {
-                        self.deviceDelegate?.didReceiveError(self, error: AidlabError.wrapping(error))
-                    }
-                    self.handleDisconnected(reason: reason)
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            onMainQueue { [self] in
+                if let refusal = beginConnectAttempt() {
+                    continuation.resume(throwing: refusal)
+                    return
                 }
-            }
+                pendingConnect = continuation
+                didNotifyConnected = false
+                deviceDelegate = delegate
+                resetBleQueue()
+                didHandleDisconnect = false
+                resetReason = nil
+                stopAllNotifications()
 
-            transport.connect { [weak self] result in
-                guard let self else { return }
-                onMainQueue {
-                    switch result {
-                    case .success:
-                        self.onTransportConnected()
-                    case let .failure(error):
-                        self.deviceDelegate?.didReceiveError(self, error: AidlabError.wrapping(error))
+                transport.onDisconnect = { [weak self] reason, error in
+                    guard let self else { return }
+                    onMainQueue {
+                        if let error {
+                            self.reportSetupError(AidlabError.wrapping(error))
+                        }
+                        self.handleDisconnected(reason: reason)
+                    }
+                }
+
+                transport.connect { [weak self] result in
+                    guard let self else { return }
+                    onMainQueue {
+                        switch result {
+                        case .success:
+                            self.onTransportConnected()
+                        case let .failure(error):
+                            self.reportSetupError(AidlabError.wrapping(error))
+                            self.handleDisconnected(reason: .unknownError)
+                        }
                     }
                 }
             }
@@ -202,10 +217,13 @@ public class Device: NSObject, @unchecked Sendable {
         }
     }
 
-    /// Configures live and autonomous collection. Returns the collect PID, or `nil` on firmware before 3.6.0.
+    /// Configures live and autonomous collection and the `events` that the device detects itself. Returns the collect
+    /// PID, or `nil` on firmware before 3.6.0.
+    /// Throws without sending anything when the firmware does not support a requested data type or event.
     @MainActor
-    public func collect(dataTypes: [DataType], dataTypesToStore: [DataType]) async throws -> UInt16? {
-        guard aidlabSDK != nil else {
+    public func collect(dataTypes: [DataType], dataTypesToStore: [DataType],
+                        events: [DeviceEventType] = []) async throws -> UInt16? {
+        guard let aidlabSDK else {
             throw AidlabError(message: "API misuse: Attempt to use the API without an established connection. Please ensure the device is connected using the connect() method before invoking this API.")
         }
 
@@ -213,25 +231,34 @@ public class Device: NSObject, @unchecked Sendable {
             throw AidlabError(message: "API misuse: Attempt to use the API without an established connection. Please ensure the device is connected using the connect() method before invoking this API.")
         }
 
+        // Bit n is the data type or event type with value n.
+        let liveFlags = dataTypes.reduce(UInt32(0)) { $0 | 1 << $1.rawValue }
+        let syncFlags = dataTypesToStore.reduce(UInt32(0)) { $0 | 1 << $1.rawValue }
+        let eventFlags = events.reduce(UInt32(0)) { $0 | 1 << $1.rawValue }
+        let unsupportedFlags = AidlabSDK_unsupported_data_types(UInt64(liveFlags | syncFlags), aidlabSDK)
+        let unsupportedEvents = AidlabSDK_unsupported_events(UInt64(eventFlags), aidlabSDK)
+        guard unsupportedFlags == 0, unsupportedEvents == 0 else {
+            let dataTypeNames = Set(dataTypes + dataTypesToStore)
+                .filter { unsupportedFlags & 1 << $0.rawValue != 0 }
+                .map { "\($0)" }
+            let eventNames = Set(events)
+                .filter { unsupportedEvents & 1 << $0.rawValue != 0 }
+                .map { "\($0)" }
+            let names = (dataTypeNames + eventNames).sorted().joined(separator: ", ")
+            throw AidlabError(message: "Firmware \(firmwareRevision ?? "") does not support \(names)")
+        }
+
         if !isLegacyFirmware() {
-            // Build flags from signal arrays (use bit flags)
-            var liveFlags: UInt32 = 0
-            var syncFlags: UInt32 = 0
-
-            for signal in dataTypes {
-                liveFlags |= 1 << signal.rawValue
-            }
-
-            for signal in dataTypesToStore {
-                syncFlags |= 1 << signal.rawValue
-            }
-
             // Check firmware version to determine collect format
             if let firmwareVersion3780 = SemVersion("3.7.80"), firmwareSemantic >= firmwareVersion3780 {
                 // CollectSettingsString - newer firmware expects string format
                 let liveHex = String(format: "%08X", liveFlags)
                 let syncHex = String(format: "%08X", syncFlags)
-                let collectCommand = "collect flags \(liveHex) \(syncHex)"
+                var collectCommand = "collect flags \(liveHex) \(syncHex)"
+                if usesV4Protocol() {
+                    // Aidlab 2 takes the events as a third mask; an empty one turns its detectors off.
+                    collectCommand += String(format: " %08X", eventFlags)
+                }
                 let activeCollectPid = activePid(for: Device.collectProcessId)
                 return try await sendProcessCommand(
                     commandBytes(collectCommand),
@@ -387,7 +414,7 @@ public class Device: NSObject, @unchecked Sendable {
             onError: { [weak self] error in
                 guard let self, required else { return }
                 onMainQueue {
-                    self.deviceDelegate?.didReceiveError(self, error: AidlabError.wrapping(error))
+                    self.reportSetupError(AidlabError.wrapping(error))
                     self.resetSession(.unknownError)
                 }
             }
@@ -413,6 +440,9 @@ public class Device: NSObject, @unchecked Sendable {
             return
         }
         didHandleDisconnect = true
+        releaseAddress()
+        let wasConnected = didNotifyConnected
+        didNotifyConnected = false
         completePendingProcessCommand(.failure(AidlabError(message: "Device disconnected")))
         completePendingProcessTermination(.failure(AidlabError(message: "Device disconnected")))
         legacyCommandConfirmation?.finish(.failure(AidlabError(message: "Device disconnected")))
@@ -433,6 +463,10 @@ public class Device: NSObject, @unchecked Sendable {
         let delegate = deviceDelegate
         deviceDelegate = nil
         transport.onDisconnect = nil
+        pendingConnect?.resume(throwing: AidlabError(message: "Device disconnected before the connection completed"))
+        pendingConnect = nil
+        // A connection that never reached didConnect fails through connect().
+        guard wasConnected else { return }
         delegate?.didDisconnect(self, reason: resolvedReason)
     }
 
@@ -469,7 +503,7 @@ public class Device: NSObject, @unchecked Sendable {
                         hardwareRevision = value
 
                         guard serialNumber != nil, firmwareRevision != nil, hardwareRevision != nil else {
-                            deviceDelegate?.didReceiveError(self, error: AidlabError(message: "Failed to read device metadata"))
+                            reportSetupError(AidlabError(message: "Failed to read device metadata"))
                             resetSession(.unknownError)
                             return
                         }
@@ -521,12 +555,15 @@ public class Device: NSObject, @unchecked Sendable {
         )
 
         /// Users are notified about the connection after reading the firmware revision
+        didNotifyConnected = true
         deviceDelegate?.didConnect(self)
+        pendingConnect?.resume()
+        pendingConnect = nil
     }
 
     func createAidlabSDK() -> Bool {
         guard let firmwareRevision else {
-            deviceDelegate?.didReceiveError(self, error: AidlabError(message: "Missing firmware revision"))
+            reportSetupError(AidlabError(message: "Missing firmware revision"))
             return false
         }
 
@@ -535,7 +572,7 @@ public class Device: NSObject, @unchecked Sendable {
         resetBleQueue()
 
         guard let aidlabSDK else {
-            deviceDelegate?.didReceiveError(self, error: AidlabError(message: "Unsupported firmware revision \(firmwareRevision)"))
+            reportSetupError(AidlabError(message: "Unsupported firmware revision \(firmwareRevision)"))
             return false
         }
 
@@ -554,32 +591,25 @@ public class Device: NSObject, @unchecked Sendable {
                                  didReceiveGyroscope,
                                  didReceiveMagnetometer,
                                  didReceiveBatteryLevel,
-                                 didDetectActivity,
                                  didReceiveSteps,
                                  didReceiveOrientation,
                                  didReceiveQuaternion,
                                  didReceiveRespirationRate,
-                                 wearStateDidChange,
                                  didReceiveHeartRate,
                                  didReceiveRr,
                                  didReceiveSoundVolume,
-                                 didDetect,
-                                 didDetectUserEvent,
                                  didReceivePressure,
-                                 pressureWearStateDidChange,
                                  didReceiveBodyPosition,
                                  didReceiveSignalQuality,
+                                 didReceiveEDA,
+                                 didReceiveGPS,
+                                 didReceiveEvent,
                                  aidlabSDK)
-
-        AidlabSDK_set_eda_callback(didReceiveEDA, aidlabSDK)
-        AidlabSDK_set_gps_callback(didReceiveGPS, aidlabSDK)
 
         AidlabSDK_set_payload_callback(didReceivePayload, aidlabSDK)
         AidlabSDK_set_process_error_callback(didReceiveProcessError, aidlabSDK)
 
-        AidlabSDK_init_synchronization_callbacks(syncStateDidChange, didReceiveUnsynchronizedSize, didReceivePastECG, didReceivePastRespiration, didReceivePastSkinTemperature, didReceivePastHeartRate, didReceivePastRr, didReceivePastActivity, didReceivePastRespirationRate, didReceivePastSteps, didDetectPastUserEvent, didReceivePastSoundVolume, didReceivePastPressure, didReceivePastAccelerometer, didReceivePastGyroscope, didReceivePastQuaternion, didReceivePastOrientation, didReceivePastMagnetometer, didReceivePastBodyPosition, didReceivePastSignalQuality, aidlabSDK)
-        AidlabSDK_set_past_eda_callback(didReceivePastEDA, aidlabSDK)
-        AidlabSDK_set_past_gps_callback(didReceivePastGPS, aidlabSDK)
+        AidlabSDK_init_synchronization_callbacks(syncStateDidChange, didReceiveUnsynchronizedSize, aidlabSDK)
         return true
     }
 
@@ -748,9 +778,13 @@ public class Device: NSObject, @unchecked Sendable {
 
         /// Whether a create lifecycle belongs to this command rather than to a raw payload sent before it.
         func answers(_ result: SystemProcessResult) -> Bool {
-            // A shell-level create_failure names no process.
-            guard let startedProcessId, let processId = result.processId else { return true }
-            return processId == startedProcessId
+            // Older A1 firmware rejects a full process table without naming the requested process.
+            if result.status == Device.systemCreateFailure, result.pid == 0, result.processId == 0 {
+                return true
+            }
+            // A one-byte create_failure rejects an unknown shell command, which an SDK command never is.
+            guard let startedProcessId else { return true }
+            return result.processId == startedProcessId
         }
     }
 
@@ -975,8 +1009,8 @@ public class Device: NSObject, @unchecked Sendable {
         }
     }
 
-    private func handleProcessCommandPayload(process: String, payload: Data) {
-        guard let result = parseSystemProcessInformation(process: process, payload: payload) else {
+    private func handleProcessCommandPayload(pid: UInt16, payload: Data) {
+        guard let result = parseSystemProcessInformation(sourcePid: pid, payload: payload) else {
             return
         }
         var commandCompletion: (PendingProcessCommand, Result<SystemProcessResult?, Error>)?
@@ -1015,7 +1049,8 @@ public class Device: NSObject, @unchecked Sendable {
     }
 
     private func updateActiveProcessPids(_ result: SystemProcessResult) {
-        if result.status == Device.systemCreateSuccess, let processId = result.processId {
+        if result.status == Device.systemCreateSuccess, let processId = result.processId,
+           processId == Device.collectProcessId || processId == Device.syncProcessId {
             activeProcessPids[processId] = result.pid
         } else if result.status == Device.systemKillSuccess {
             // Firmware before 3.7.113 reports an ended collect process with a wrong process ID; the PID is unique.
@@ -1027,8 +1062,8 @@ public class Device: NSObject, @unchecked Sendable {
         activeProcessPids[processId]
     }
 
-    private func parseSystemProcessInformation(process: String, payload: Data) -> SystemProcessResult? {
-        guard process.caseInsensitiveCompare("system") == .orderedSame,
+    private func parseSystemProcessInformation(sourcePid: UInt16, payload: Data) -> SystemProcessResult? {
+        guard sourcePid == 0, hasProcesses(),
               let status = payload.first,
               status <= Device.systemKillFailure
         else {
@@ -1119,139 +1154,185 @@ public class Device: NSObject, @unchecked Sendable {
         self_.refuseFrame(AidlabError(message: "Device rejected the frame with NAK code \(result)"))
     }
 
-    private let didReceiveECG: callbackSampleTime = { context, timestamp, value in
+    // Data callbacks carry live data with `past` false and synchronized data with `past` true.
+    private let didReceiveECG: callbackSampleTime = { context, past, timestamp, value in
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceiveECG(self_, timestamp: timestamp, value: value)
+        if past {
+            self_.deviceDelegate?.didReceivePastECG(self_, timestamp: timestamp, value: value)
+        } else {
+            self_.deviceDelegate?.didReceiveECG(self_, timestamp: timestamp, value: value)
+        }
     }
 
-    private let didReceiveRespiration: callbackSampleTime = { context, timestamp, value in
+    private let didReceiveRespiration: callbackSampleTime = { context, past, timestamp, value in
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceiveRespiration(self_, timestamp: timestamp, value: value)
+        if past {
+            self_.deviceDelegate?.didReceivePastRespiration(self_, timestamp: timestamp, value: value)
+        } else {
+            self_.deviceDelegate?.didReceiveRespiration(self_, timestamp: timestamp, value: value)
+        }
     }
 
-    private let didReceiveSkinTemperature: callbackSampleTime = { context, timestamp, value in
+    private let didReceiveSkinTemperature: callbackSampleTime = { context, past, timestamp, value in
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceiveSkinTemperature(self_, timestamp: timestamp, value: value)
+        if past {
+            self_.deviceDelegate?.didReceivePastSkinTemperature(self_, timestamp: timestamp, value: value)
+        } else {
+            self_.deviceDelegate?.didReceiveSkinTemperature(self_, timestamp: timestamp, value: value)
+        }
     }
 
-    private let didReceiveAccelerometer: callbackAccelerometer = { context, timestamp, ax, ay, az in
+    private let didReceiveAccelerometer: callbackAccelerometer = { context, past, timestamp, ax, ay, az in
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceiveAccelerometer(self_, timestamp: timestamp, ax: ax, ay: ay, az: az)
+        if past {
+            self_.deviceDelegate?.didReceivePastAccelerometer(self_, timestamp: timestamp, ax: ax, ay: ay, az: az)
+        } else {
+            self_.deviceDelegate?.didReceiveAccelerometer(self_, timestamp: timestamp, ax: ax, ay: ay, az: az)
+        }
     }
 
-    private let didReceiveGyroscope: callbackGyroscope = { context, timestamp, gx, gy, gz in
+    private let didReceiveGyroscope: callbackGyroscope = { context, past, timestamp, gx, gy, gz in
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceiveGyroscope(self_, timestamp: timestamp, gx: gx, gy: gy, gz: gz)
+        if past {
+            self_.deviceDelegate?.didReceivePastGyroscope(self_, timestamp: timestamp, gx: gx, gy: gy, gz: gz)
+        } else {
+            self_.deviceDelegate?.didReceiveGyroscope(self_, timestamp: timestamp, gx: gx, gy: gy, gz: gz)
+        }
     }
 
-    private let didReceiveMagnetometer: callbackMagnetometer = { context, timestamp, mx, my, mz in
+    private let didReceiveMagnetometer: callbackMagnetometer = { context, past, timestamp, mx, my, mz in
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceiveMagnetometer(self_, timestamp: timestamp, mx: mx, my: my, mz: mz)
+        if past {
+            self_.deviceDelegate?.didReceivePastMagnetometer(self_, timestamp: timestamp, mx: mx, my: my, mz: mz)
+        } else {
+            self_.deviceDelegate?.didReceiveMagnetometer(self_, timestamp: timestamp, mx: mx, my: my, mz: mz)
+        }
     }
 
-    private let didReceiveQuaternion: callbackQuaternion = { context, timestamp, qw, qx, qy, qz in
+    private let didReceiveQuaternion: callbackQuaternion = { context, past, timestamp, qw, qx, qy, qz in
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceiveQuaternion(self_, timestamp: timestamp, qw: qw, qx: qx, qy: qy, qz: qz)
+        if past {
+            self_.deviceDelegate?.didReceivePastQuaternion(self_, timestamp: timestamp, qw: qw, qx: qx, qy: qy, qz: qz)
+        } else {
+            self_.deviceDelegate?.didReceiveQuaternion(self_, timestamp: timestamp, qw: qw, qx: qx, qy: qy, qz: qz)
+        }
     }
 
-    private let didReceiveOrientation: callbackOrientation = { context, timestamp, roll, pitch, yaw in
+    private let didReceiveOrientation: callbackOrientation = { context, past, timestamp, roll, pitch, yaw in
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceiveOrientation(self_, timestamp: timestamp, roll: roll, pitch: pitch, yaw: yaw)
+        if past {
+            self_.deviceDelegate?.didReceivePastOrientation(self_, timestamp: timestamp, roll: roll, pitch: pitch, yaw: yaw)
+        } else {
+            self_.deviceDelegate?.didReceiveOrientation(self_, timestamp: timestamp, roll: roll, pitch: pitch, yaw: yaw)
+        }
     }
 
-    private let didReceiveEDA: callbackEda = { context, timestamp, conductance in
+    private let didReceiveEDA: callbackEda = { context, past, timestamp, conductance in
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceiveEDA(self_, timestamp: timestamp, conductance: conductance)
+        if past {
+            self_.deviceDelegate?.didReceivePastEDA(self_, timestamp: timestamp, conductance: conductance)
+        } else {
+            self_.deviceDelegate?.didReceiveEDA(self_, timestamp: timestamp, conductance: conductance)
+        }
     }
 
-    private let didReceiveGPS: callbackGps = { context, timestamp, latitude, longitude, altitude, speed, heading, hdop in
+    private let didReceiveGPS: callbackGps = { context, past, timestamp, latitude, longitude, altitude, speed, heading, hdop in
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceiveGPS(self_,
-                                            timestamp: timestamp,
-                                            latitude: Double(latitude),
-                                            longitude: Double(longitude),
-                                            altitude: Double(altitude),
-                                            speed: speed,
-                                            heading: heading,
-                                            hdop: hdop)
+        if past {
+            self_.deviceDelegate?.didReceivePastGPS(self_,
+                                                    timestamp: timestamp,
+                                                    latitude: Double(latitude),
+                                                    longitude: Double(longitude),
+                                                    altitude: Double(altitude),
+                                                    speed: speed,
+                                                    heading: heading,
+                                                    hdop: hdop)
+        } else {
+            self_.deviceDelegate?.didReceiveGPS(self_,
+                                                timestamp: timestamp,
+                                                latitude: Double(latitude),
+                                                longitude: Double(longitude),
+                                                altitude: Double(altitude),
+                                                speed: speed,
+                                                heading: heading,
+                                                hdop: hdop)
+        }
     }
 
-    private let didReceiveBodyPosition: callbackBodyPosition = { context, timestamp, bodyPosition in
+    private let didReceiveBodyPosition: callbackBodyPosition = { context, past, timestamp, bodyPosition in
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceiveBodyPosition(self_, timestamp: timestamp, bodyPosition: BodyPosition(bodyPosition: bodyPosition))
+        let position = BodyPosition(bodyPosition: bodyPosition)
+        if past {
+            self_.deviceDelegate?.didReceivePastBodyPosition(self_, timestamp: timestamp, bodyPosition: position)
+        } else {
+            self_.deviceDelegate?.didReceiveBodyPosition(self_, timestamp: timestamp, bodyPosition: position)
+        }
     }
 
-    private let didReceiveHeartRate: callbackHeartRate = { context, timestamp, heartRate in
+    private let didReceiveHeartRate: callbackHeartRate = { context, past, timestamp, heartRate in
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceiveHeartRate(self_, timestamp: timestamp, heartRate: heartRate)
+        if past {
+            self_.deviceDelegate?.didReceivePastHeartRate(self_, timestamp: timestamp, heartRate: heartRate)
+        } else {
+            self_.deviceDelegate?.didReceiveHeartRate(self_, timestamp: timestamp, heartRate: heartRate)
+        }
     }
 
-    private let didReceiveRr: callbackRr = { context, timestamp, rr in
+    private let didReceiveRr: callbackRr = { context, past, timestamp, rr in
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceiveRr(self_, timestamp: timestamp, rr: rr)
+        if past {
+            self_.deviceDelegate?.didReceivePastRr(self_, timestamp: timestamp, rr: rr)
+        } else {
+            self_.deviceDelegate?.didReceiveRr(self_, timestamp: timestamp, rr: rr)
+        }
     }
 
-    private let didReceiveRespirationRate: callbackRespirationRate = { context, timestamp, respirationRate in
+    private let didReceiveRespirationRate: callbackRespirationRate = { context, past, timestamp, respirationRate in
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceiveRespirationRate(self_, timestamp: timestamp, value: respirationRate)
+        if past {
+            self_.deviceDelegate?.didReceivePastRespirationRate(self_, timestamp: timestamp, value: respirationRate)
+        } else {
+            self_.deviceDelegate?.didReceiveRespirationRate(self_, timestamp: timestamp, value: respirationRate)
+        }
     }
 
-    private let wearStateDidChange: callbackWearState = { context, state in
+    private let didReceiveSoundVolume: callbackSoundVolume = { context, past, timestamp, soundVolume in
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.wearStateDidChange(self_, wearState: WearState(wearState: state))
+        if past {
+            self_.deviceDelegate?.didReceivePastSoundVolume(self_, timestamp: timestamp, soundVolume: soundVolume)
+        } else {
+            self_.deviceDelegate?.didReceiveSoundVolume(self_, timestamp: timestamp, soundVolume: soundVolume)
+        }
     }
 
-    private let didReceiveSoundVolume: callbackSoundVolume = { context, timestamp, soundVolume in
+    private let didReceivePressure: callbackPressure = { context, past, timestamp, value in
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceiveSoundVolume(self_, timestamp: timestamp, soundVolume: soundVolume)
+        if past {
+            self_.deviceDelegate?.didReceivePastPressure(self_, timestamp: timestamp, value: value)
+        } else {
+            self_.deviceDelegate?.didReceivePressure(self_, timestamp: timestamp, value: value)
+        }
     }
 
-    private let didReceivePressure: callbackPressure = { context, timestamp, value in
+    private let didReceivePayload: callbackPayload = { context, pid, payload, payloadLength, options in
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceivePressure(self_, timestamp: timestamp, value: value)
-    }
-
-    private let pressureWearStateDidChange: callbackWearState = { context, state in
-        guard let context else { return }
-        let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.pressureWearStateDidChange(self_, wearState: WearState(wearState: state))
-    }
-
-    private let didDetect: callback_function = { context, exercise in
-        guard let context else { return }
-        if exercise == AidlabSDK.exerciseNone { return }
-        let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didDetectExercise(self_, exercise: Exercise(exercise: exercise))
-    }
-
-    private let didDetectActivity: callbackActivity = { context, timestamp, activity in
-        guard let context else { return }
-        let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceiveActivity(self_, timestamp: timestamp, activity: ActivityType(activityType: activity))
-    }
-
-    private let didReceivePayload: callbackPayload = { context, process, payload, payloadLength, options in
-        guard let context else { return }
-        let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-
-        let processString = process.map { String(cString: $0) } ?? "unknown"
 
         let rawPayload = if let payload, payloadLength > 0 {
             Data(bytes: payload, count: Int(payloadLength))
@@ -1259,31 +1340,31 @@ public class Device: NSObject, @unchecked Sendable {
             Data()
         }
 
-        self_.handleProcessCommandPayload(process: processString, payload: rawPayload)
+        self_.handleProcessCommandPayload(pid: pid, payload: rawPayload)
         if rawPayload == Device.legacyCommandReceived {
             self_.legacyCommandConfirmation?.finish(.success(()))
         }
-        self_.deviceDelegate?.didReceivePayload(self_, process: processString, payload: rawPayload, options: options)
+        self_.deviceDelegate?.didReceivePayload(self_, pid: pid, payload: rawPayload, options: options)
     }
 
-    private let didReceiveProcessError: callbackProcessError = { context, process, pid, payload, payloadLength, options in
+    private let didReceiveProcessError: callbackProcessError = { context, pid, payload, payloadLength, options in
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        let processString = process.map { String(cString: $0) } ?? "unknown"
         let rawPayload = if let payload, payloadLength > 0 {
             Data(bytes: payload, count: Int(payloadLength))
         } else {
             Data()
         }
         self_.deviceDelegate?.didReceiveProcessError(
-            self_, process: processString, pid: pid, payload: rawPayload, options: options
+            self_, pid: pid, payload: rawPayload, options: options
         )
     }
 
-    private let didDetectUserEvent: callbackUserEvent = { context, timestamp in
-        guard let context else { return }
+    /// The core event is valid only during the call, so it is converted before the delegate sees it.
+    private let didReceiveEvent: callbackEvent = { context, past, event in
+        guard let context, let event, let deviceEvent = makeDeviceEvent(event.pointee, past: past) else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didDetectUserEvent(self_, timestamp: timestamp)
+        self_.deviceDelegate?.didReceiveEvent(self_, event: deviceEvent)
     }
 
     private let didReceiveError: callbackError = { context, code, text in
@@ -1302,10 +1383,14 @@ public class Device: NSObject, @unchecked Sendable {
         }
     }
 
-    private let didReceiveSignalQuality: callbackSignalQuality = { context, timestamp, value in
+    private let didReceiveSignalQuality: callbackSignalQuality = { context, past, timestamp, value in
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceiveSignalQuality(self_, timestamp: timestamp, value: value)
+        if past {
+            self_.deviceDelegate?.didReceivePastSignalQuality(self_, timestamp: timestamp, value: value)
+        } else {
+            self_.deviceDelegate?.didReceiveSignalQuality(self_, timestamp: timestamp, value: value)
+        }
     }
 
     private let didReceiveBatteryLevel: callbackBatteryLevel = { context, stateOfCharge in
@@ -1314,34 +1399,14 @@ public class Device: NSObject, @unchecked Sendable {
         self_.deviceDelegate?.didReceiveBatteryLevel(self_, stateOfCharge: stateOfCharge)
     }
 
-    private let didReceiveSteps: callbackSteps = { context, timestamp, value in
+    private let didReceiveSteps: callbackSteps = { context, past, timestamp, value in
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceiveSteps(self_, timestamp: timestamp, value: value)
-    }
-
-    private let didReceivePastECG: callbackSampleTime = { context, timestamp, value in
-        guard let context else { return }
-        let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceivePastECG(self_, timestamp: timestamp, value: value)
-    }
-
-    private let didReceivePastRespiration: callbackSampleTime = { context, timestamp, value in
-        guard let context else { return }
-        let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceivePastRespiration(self_, timestamp: timestamp, value: value)
-    }
-
-    private let didReceivePastSkinTemperature: callbackSampleTime = { context, timestamp, value in
-        guard let context else { return }
-        let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceivePastSkinTemperature(self_, timestamp: timestamp, value: value)
-    }
-
-    private let didReceivePastHeartRate: callbackHeartRate = { context, timestamp, heartRate in
-        guard let context else { return }
-        let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceivePastHeartRate(self_, timestamp: timestamp, heartRate: heartRate)
+        if past {
+            self_.deviceDelegate?.didReceivePastSteps(self_, timestamp: timestamp, value: value)
+        } else {
+            self_.deviceDelegate?.didReceiveSteps(self_, timestamp: timestamp, value: value)
+        }
     }
 
     private let syncStateDidChange: callbackSyncState = { context, state in
@@ -1354,108 +1419,5 @@ public class Device: NSObject, @unchecked Sendable {
         guard let context else { return }
         let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
         self_.deviceDelegate?.didReceiveUnsynchronizedSize(self_, unsynchronizedSize: unsynchronizedSize, syncBytesPerSecond: syncBytesPerSecond)
-    }
-
-    private let didReceivePastRespirationRate: callbackRespirationRate = { context, timestamp, value in
-        guard let context else { return }
-        let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceivePastRespirationRate(self_, timestamp: timestamp, value: value)
-    }
-
-    private let didReceivePastActivity: callbackActivity = { context, timestamp, activity in
-        guard let context else { return }
-        let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceivePastActivity(self_, timestamp: timestamp, activity: ActivityType(activityType: activity))
-    }
-
-    private let didReceivePastSteps: callbackSteps = { context, timestamp, value in
-        guard let context else { return }
-        let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceivePastSteps(self_, timestamp: timestamp, value: value)
-    }
-
-    private let didReceivePastRr: callbackRr = { context, timestamp, rr in
-        guard let context else { return }
-        let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceivePastRr(self_, timestamp: timestamp, rr: rr)
-    }
-
-    private let didReceivePastSoundVolume: callbackSoundVolume = { context, timestamp, soundVolume in
-        guard let context else { return }
-        let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceivePastSoundVolume(self_, timestamp: timestamp, soundVolume: soundVolume)
-    }
-
-    private let didReceivePastPressure: callbackPressure = { context, timestamp, value in
-        guard let context else { return }
-        let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceivePastPressure(self_, timestamp: timestamp, value: value)
-    }
-
-    private let didReceivePastAccelerometer: callbackAccelerometer = { context, timestamp, ax, ay, az in
-        guard let context else { return }
-        let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceivePastAccelerometer(self_, timestamp: timestamp, ax: ax, ay: ay, az: az)
-    }
-
-    private let didReceivePastGyroscope: callbackGyroscope = { context, timestamp, gx, gy, gz in
-        guard let context else { return }
-        let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceivePastGyroscope(self_, timestamp: timestamp, gx: gx, gy: gy, gz: gz)
-    }
-
-    private let didReceivePastQuaternion: callbackQuaternion = { context, timestamp, qw, qx, qy, qz in
-        guard let context else { return }
-        let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceivePastQuaternion(self_, timestamp: timestamp, qw: qw, qx: qx, qy: qy, qz: qz)
-    }
-
-    private let didReceivePastOrientation: callbackOrientation = { context, timestamp, roll, pitch, yaw in
-        guard let context else { return }
-        let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceivePastOrientation(self_, timestamp: timestamp, roll: roll, pitch: pitch, yaw: yaw)
-    }
-
-    private let didReceivePastEDA: callbackEda = { context, timestamp, conductance in
-        guard let context else { return }
-        let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceivePastEDA(self_, timestamp: timestamp, conductance: conductance)
-    }
-
-    private let didReceivePastGPS: callbackGps = { context, timestamp, latitude, longitude, altitude, speed, heading, hdop in
-        guard let context else { return }
-        let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceivePastGPS(self_,
-                                                timestamp: timestamp,
-                                                latitude: Double(latitude),
-                                                longitude: Double(longitude),
-                                                altitude: Double(altitude),
-                                                speed: speed,
-                                                heading: heading,
-                                                hdop: hdop)
-    }
-
-    private let didReceivePastMagnetometer: callbackMagnetometer = { context, timestamp, mx, my, mz in
-        guard let context else { return }
-        let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceivePastMagnetometer(self_, timestamp: timestamp, mx: mx, my: my, mz: mz)
-    }
-
-    private let didReceivePastBodyPosition: callbackBodyPosition = { context, timestamp, bodyPosition in
-        guard let context else { return }
-        let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceivePastBodyPosition(self_, timestamp: timestamp, bodyPosition: BodyPosition(bodyPosition: bodyPosition))
-    }
-
-    private let didDetectPastUserEvent: callbackUserEvent = { context, timestamp in
-        guard let context else { return }
-        let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didDetectPastUserEvent(self_, timestamp: timestamp)
-    }
-
-    private let didReceivePastSignalQuality: callbackSignalQuality = { context, timestamp, value in
-        guard let context else { return }
-        let self_ = Unmanaged<Device>.fromOpaque(context).takeUnretainedValue()
-        self_.deviceDelegate?.didReceivePastSignalQuality(self_, timestamp: timestamp, value: value)
     }
 }

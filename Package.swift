@@ -7,9 +7,9 @@ let package = Package(
     name: "Aidlab",
     platforms: [
         .iOS(.v15),
-        .macOS(.v11),
+        .macOS(.v12),
         .tvOS(.v15),
-        .watchOS(.v8)
+        .watchOS(.v9)
     ],
     products: [
         .library(

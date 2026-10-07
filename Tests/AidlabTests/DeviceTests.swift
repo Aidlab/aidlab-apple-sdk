@@ -3,6 +3,7 @@
 //
 
 @testable import Aidlab
+import struct AidlabSDK.AidlabEvent
 import CoreBluetooth
 import XCTest
 
@@ -19,6 +20,8 @@ private let collectProcess: UInt8 = 8
 private struct HostFrame {
     let pid: UInt16
     let flags: UInt8
+    let reserved: UInt8
+    let options: UInt64
     let text: String
 }
 
@@ -99,7 +102,7 @@ private final class MockTransport: AidlabTransport, @unchecked Sendable {
     }
 
     /// Replies from `pid`: V4 frames on Aidlab 2, V3.0 frames on Aidmed One 3.2-3.5.
-    func reply(pid: UInt16, _ payload: [UInt8], requestAck: Bool = false) {
+    func reply(pid: UInt16, _ payload: [UInt8], processType: UInt8 = 0, options: UInt64 = 0, requestAck: Bool = false) {
         if usesV4 {
             var header = [UInt8](repeating: 0, count: 20)
             header[0] = 4
@@ -108,6 +111,10 @@ private final class MockTransport: AidlabTransport, @unchecked Sendable {
             header[4] = UInt8(payload.count >> 8)
             header[5] = UInt8(pid & 0xFF)
             header[6] = UInt8(pid >> 8)
+            header[2] = processType
+            for index in 0 ..< 8 {
+                header[7 + index] = UInt8(truncatingIfNeeded: options >> (8 * index))
+            }
             header[16] = requestAck ? 0x04 : 0
             notify(header + payload)
         } else {
@@ -139,6 +146,8 @@ private final class MockTransport: AidlabTransport, @unchecked Sendable {
         let hostFrame = HostFrame(
             pid: UInt16(frame[5]) | (UInt16(frame[6]) << 8),
             flags: usesV4 ? frame[16] : 0,
+            reserved: usesV4 ? frame[2] : 0,
+            options: usesV4 ? (0 ..< 8).reduce(UInt64(0)) { $0 | (UInt64(frame[7 + $1]) << (8 * $1)) } : 0,
             text: String(bytes: payload, encoding: .utf8) ?? ""
         )
         hostFrames.append(hostFrame)
@@ -151,9 +160,19 @@ private final class RecordingDelegate: DeviceDelegate, @unchecked Sendable {
     var disconnects: [DisconnectReason] = []
     var errors: [AidlabError] = []
     var terminated: [UInt16] = []
+    var syncStates: [SyncState] = []
+    var onSyncState: (() -> Void)?
     var onConnect: ((Device) -> Void)?
     var onDisconnect: ((Device) -> Void)?
     var onPayload: ((Device) -> Void)?
+    var payloads: [(pid: UInt16, payload: Data, options: UInt64)] = []
+    /// Data callbacks in arrival order, each with its first value.
+    var dataCalls: [(method: String, value: String)] = []
+    var events: [any DeviceEvent] = []
+
+    private func record(_ value: Any, method: String = #function) {
+        dataCalls.append((String(method.prefix { $0 != "(" }), "\(value)"))
+    }
 
     func didConnect(_ device: Device) {
         connects += 1
@@ -169,7 +188,8 @@ private final class RecordingDelegate: DeviceDelegate, @unchecked Sendable {
         errors.append(error)
     }
 
-    func didReceivePayload(_ device: Device, process _: String, payload _: Data, options _: UInt64) {
+    func didReceivePayload(_ device: Device, pid: UInt16, payload: Data, options: UInt64) {
+        payloads.append((pid, payload, options))
         onPayload?(device)
     }
 
@@ -177,53 +197,50 @@ private final class RecordingDelegate: DeviceDelegate, @unchecked Sendable {
         terminated.append(pid)
     }
 
-    func didReceiveECG(_: Device, timestamp _: UInt64, value _: Float) {}
-    func didReceiveRespiration(_: Device, timestamp _: UInt64, value _: Float) {}
+    func didReceiveECG(_: Device, timestamp _: UInt64, value: Float) { record(value) }
+    func didReceiveRespiration(_: Device, timestamp _: UInt64, value: Float) { record(value) }
     func didReceiveBatteryLevel(_: Device, stateOfCharge _: UInt8) {}
-    func didReceiveSteps(_: Device, timestamp _: UInt64, value _: UInt64) {}
-    func didReceiveSkinTemperature(_: Device, timestamp _: UInt64, value _: Float) {}
-    func didReceiveAccelerometer(_: Device, timestamp _: UInt64, ax _: Float, ay _: Float, az _: Float) {}
-    func didReceiveGyroscope(_: Device, timestamp _: UInt64, gx _: Float, gy _: Float, gz _: Float) {}
-    func didReceiveMagnetometer(_: Device, timestamp _: UInt64, mx _: Float, my _: Float, mz _: Float) {}
-    func didReceiveQuaternion(_: Device, timestamp _: UInt64, qw _: Float, qx _: Float, qy _: Float, qz _: Float) {}
-    func didReceiveOrientation(_: Device, timestamp _: UInt64, roll _: Float, pitch _: Float, yaw _: Float) {}
-    func didReceiveEDA(_: Device, timestamp _: UInt64, conductance _: Float) {}
-    func didReceiveGPS(_: Device, timestamp _: UInt64, latitude _: Double, longitude _: Double, altitude _: Double, speed _: Float, heading _: Float, hdop _: Float) {}
-    func didReceiveBodyPosition(_: Device, timestamp _: UInt64, bodyPosition _: BodyPosition) {}
-    func didReceiveHeartRate(_: Device, timestamp _: UInt64, heartRate _: Int32) {}
-    func didReceiveRr(_: Device, timestamp _: UInt64, rr _: Int32) {}
-    func didReceiveRespirationRate(_: Device, timestamp _: UInt64, value _: UInt32) {}
-    func didReceiveSoundVolume(_: Device, timestamp _: UInt64, soundVolume _: UInt16) {}
-    func didDetectExercise(_: Device, exercise _: Exercise) {}
-    func didReceiveActivity(_: Device, timestamp _: UInt64, activity _: ActivityType) {}
+    func didReceiveSteps(_: Device, timestamp _: UInt64, value: UInt64) { record(value) }
+    func didReceiveSkinTemperature(_: Device, timestamp _: UInt64, value: Float) { record(value) }
+    func didReceiveAccelerometer(_: Device, timestamp _: UInt64, ax: Float, ay _: Float, az _: Float) { record(ax) }
+    func didReceiveGyroscope(_: Device, timestamp _: UInt64, gx: Float, gy _: Float, gz _: Float) { record(gx) }
+    func didReceiveMagnetometer(_: Device, timestamp _: UInt64, mx: Float, my _: Float, mz _: Float) { record(mx) }
+    func didReceiveQuaternion(_: Device, timestamp _: UInt64, qw: Float, qx _: Float, qy _: Float, qz _: Float) { record(qw) }
+    func didReceiveOrientation(_: Device, timestamp _: UInt64, roll: Float, pitch _: Float, yaw _: Float) { record(roll) }
+    func didReceiveEDA(_: Device, timestamp _: UInt64, conductance: Float) { record(conductance) }
+    func didReceiveGPS(_: Device, timestamp _: UInt64, latitude: Double, longitude _: Double, altitude _: Double, speed _: Float, heading _: Float, hdop _: Float) { record(latitude) }
+    func didReceiveBodyPosition(_: Device, timestamp _: UInt64, bodyPosition: BodyPosition) { record(bodyPosition) }
+    func didReceiveHeartRate(_: Device, timestamp _: UInt64, heartRate: Int32) { record(heartRate) }
+    func didReceiveRr(_: Device, timestamp _: UInt64, rr: Int32) { record(rr) }
+    func didReceiveRespirationRate(_: Device, timestamp _: UInt64, value: UInt32) { record(value) }
+    func didReceiveSoundVolume(_: Device, timestamp _: UInt64, soundVolume: UInt16) { record(soundVolume) }
     func didUpdateRSSI(_: Device, rssi _: Int32) {}
-    func wearStateDidChange(_: Device, wearState _: WearState) {}
-    func didDetectUserEvent(_: Device, timestamp _: UInt64) {}
-    func didReceiveSignalQuality(_: Device, timestamp _: UInt64, value _: UInt8) {}
-    func syncStateDidChange(_: Device, state _: SyncState) {}
-    func didReceivePastECG(_: Device, timestamp _: UInt64, value _: Float) {}
-    func didReceivePastRespiration(_: Device, timestamp _: UInt64, value _: Float) {}
-    func didReceivePastSkinTemperature(_: Device, timestamp _: UInt64, value _: Float) {}
-    func didReceivePastHeartRate(_: Device, timestamp _: UInt64, heartRate _: Int32) {}
-    func didReceivePastRr(_: Device, timestamp _: UInt64, rr _: Int32) {}
+    func didReceiveEvent(_: Device, event: any DeviceEvent) { events.append(event) }
+    func didReceiveSignalQuality(_: Device, timestamp _: UInt64, value: UInt8) { record(value) }
+    func syncStateDidChange(_: Device, state: SyncState) {
+        syncStates.append(state)
+        onSyncState?()
+    }
+    func didReceivePastECG(_: Device, timestamp _: UInt64, value: Float) { record(value) }
+    func didReceivePastRespiration(_: Device, timestamp _: UInt64, value: Float) { record(value) }
+    func didReceivePastSkinTemperature(_: Device, timestamp _: UInt64, value: Float) { record(value) }
+    func didReceivePastHeartRate(_: Device, timestamp _: UInt64, heartRate: Int32) { record(heartRate) }
+    func didReceivePastRr(_: Device, timestamp _: UInt64, rr: Int32) { record(rr) }
     func didReceiveUnsynchronizedSize(_: Device, unsynchronizedSize _: UInt32, syncBytesPerSecond _: Float) {}
-    func didReceivePastRespirationRate(_: Device, timestamp _: UInt64, value _: UInt32) {}
-    func didReceivePastActivity(_: Device, timestamp _: UInt64, activity _: ActivityType) {}
-    func didReceivePastSteps(_: Device, timestamp _: UInt64, value _: UInt64) {}
-    func didReceivePastSoundVolume(_: Device, timestamp _: UInt64, soundVolume _: UInt16) {}
-    func didReceivePastAccelerometer(_: Device, timestamp _: UInt64, ax _: Float, ay _: Float, az _: Float) {}
-    func didReceivePastGyroscope(_: Device, timestamp _: UInt64, gx _: Float, gy _: Float, gz _: Float) {}
-    func didReceivePastMagnetometer(_: Device, timestamp _: UInt64, mx _: Float, my _: Float, mz _: Float) {}
-    func didReceivePastQuaternion(_: Device, timestamp _: UInt64, qw _: Float, qx _: Float, qy _: Float, qz _: Float) {}
-    func didReceivePastOrientation(_: Device, timestamp _: UInt64, roll _: Float, pitch _: Float, yaw _: Float) {}
-    func didReceivePastEDA(_: Device, timestamp _: UInt64, conductance _: Float) {}
-    func didReceivePastGPS(_: Device, timestamp _: UInt64, latitude _: Double, longitude _: Double, altitude _: Double, speed _: Float, heading _: Float, hdop _: Float) {}
-    func didReceivePastBodyPosition(_: Device, timestamp _: UInt64, bodyPosition _: BodyPosition) {}
-    func didReceivePastPressure(_: Device, timestamp _: UInt64, value _: Int32) {}
-    func didDetectPastUserEvent(_: Device, timestamp _: UInt64) {}
-    func didReceivePastSignalQuality(_: Device, timestamp _: UInt64, value _: UInt8) {}
-    func pressureWearStateDidChange(_: Device, wearState _: WearState) {}
-    func didReceivePressure(_: Device, timestamp _: UInt64, value _: Int32) {}
+    func didReceivePastRespirationRate(_: Device, timestamp _: UInt64, value: UInt32) { record(value) }
+    func didReceivePastSteps(_: Device, timestamp _: UInt64, value: UInt64) { record(value) }
+    func didReceivePastSoundVolume(_: Device, timestamp _: UInt64, soundVolume: UInt16) { record(soundVolume) }
+    func didReceivePastAccelerometer(_: Device, timestamp _: UInt64, ax: Float, ay _: Float, az _: Float) { record(ax) }
+    func didReceivePastGyroscope(_: Device, timestamp _: UInt64, gx: Float, gy _: Float, gz _: Float) { record(gx) }
+    func didReceivePastMagnetometer(_: Device, timestamp _: UInt64, mx: Float, my _: Float, mz _: Float) { record(mx) }
+    func didReceivePastQuaternion(_: Device, timestamp _: UInt64, qw: Float, qx _: Float, qy _: Float, qz _: Float) { record(qw) }
+    func didReceivePastOrientation(_: Device, timestamp _: UInt64, roll: Float, pitch _: Float, yaw _: Float) { record(roll) }
+    func didReceivePastEDA(_: Device, timestamp _: UInt64, conductance: Float) { record(conductance) }
+    func didReceivePastGPS(_: Device, timestamp _: UInt64, latitude: Double, longitude _: Double, altitude _: Double, speed _: Float, heading _: Float, hdop _: Float) { record(latitude) }
+    func didReceivePastBodyPosition(_: Device, timestamp _: UInt64, bodyPosition: BodyPosition) { record(bodyPosition) }
+    func didReceivePastPressure(_: Device, timestamp _: UInt64, value: Int32) { record(value) }
+    func didReceivePastSignalQuality(_: Device, timestamp _: UInt64, value: UInt8) { record(value) }
+    func didReceivePressure(_: Device, timestamp _: UInt64, value: Int32) { record(value) }
 }
 
 private struct Session {
@@ -244,17 +261,111 @@ private func acknowledgeCommands(_ transport: MockTransport, pid: UInt8, process
     }
 }
 
+/// Converts a core event of an `EventType` value that starts at 1700000000000.
+private func decodedEvent(_ type: UInt32, code: Int32, end: UInt64 = 0, confidence: Float = -1, modelVersion: UInt32 = 0,
+                          aux: String? = nil, subtyp: Int8 = 0, past: Bool = false) -> (any DeviceEvent)? {
+    func decode(_ aux: UnsafePointer<CChar>?) -> (any DeviceEvent)? {
+        makeDeviceEvent(AidlabEvent(type: type, code: code, timestamp: 1_700_000_000_000, endTimestamp: end,
+                                    confidence: confidence, modelVersion: modelVersion, aux: aux, subtyp: subtyp),
+                        past: past)
+    }
+    return aux.map { $0.withCString(decode) } ?? decode(nil)
+}
+
 @MainActor
 final class DeviceTests: XCTestCase {
-    /// Connects a device running `firmware` and waits for didConnect.
+    func testReservedV4TypeHeaderIdentifiesSyncThroughLifecycle() async throws {
+        let session = await connect()
+        let transport = session.transport
+        let syncStarted = expectation(description: "Sync data follows PID binding")
+        session.delegate.onSyncState = { syncStarted.fulfill() }
+        transport.onHostFrame = { [unowned transport] frame in
+            XCTAssertEqual(frame.reserved, 0)
+            XCTAssertEqual(frame.options, 0)
+            transport.notify(ack)
+            if frame.text.hasPrefix("sync") {
+                // The raw ping has a different legacy lifecycle ID from Sync.
+                transport.reply(pid: 0, [0, 41, 0, 2], options: 2)
+                transport.reply(pid: 0, [0, 1, 2, syncProcess], options: 7)
+                transport.reply(pid: 513, Array("sync start\0".utf8))
+            }
+        }
+        try await session.device.send(Array("ping\0".utf8))
+        let pid = try await session.device.startSynchronization()
+        XCTAssertEqual(pid, 513)
+        await fulfillment(of: [syncStarted], timeout: 1)
+        XCTAssertEqual(session.delegate.syncStates, [.start])
+        XCTAssertEqual(session.delegate.payloads.last?.options, 7)
+        XCTAssertTrue(session.delegate.errors.isEmpty)
+    }
+
+    func testCollectedDataIsLiveAndSynchronizedDataIsPast() async throws {
+        // One serialized session that the core decodes into one sample of each of 18 data types, wear states of the
+        // electrodes and the cannula, an activity that goes on, and a user event.
+        let hex = Array("0068e5cf8b010000e86be5cf8b01000000030000000103000000010200740e010048020020030200003c0400000003e8000012001000f80004000800f000008001e0fd8000500e00000000000000400000000000000001000204006400000002000f000800f469e5cf8b0100000100020100570c000000018bcfe568644020000020000000018bcfe568c84251000041a8000042c800003fc0000042b400003f400000")
+        let oneOfEach = try stride(from: 0, to: hex.count, by: 2).map {
+            try XCTUnwrap(UInt8(String(hex[$0 ... $0 + 1]), radix: 16))
+        }
+        let expected: [(live: String, past: String, value: String?)] = [
+            ("didReceiveECG", "didReceivePastECG", nil),
+            ("didReceiveRespiration", "didReceivePastRespiration", nil),
+            ("didReceiveSkinTemperature", "didReceivePastSkinTemperature", "37.0"),
+            ("didReceiveAccelerometer", "didReceivePastAccelerometer", "1.0"),
+            ("didReceiveGyroscope", "didReceivePastGyroscope", nil),
+            ("didReceiveMagnetometer", "didReceivePastMagnetometer", "30.0"),
+            ("didReceiveQuaternion", "didReceivePastQuaternion", "1.0"),
+            ("didReceiveOrientation", "didReceivePastOrientation", nil),
+            ("didReceiveEDA", "didReceivePastEDA", "2.5"),
+            ("didReceiveGPS", "didReceivePastGPS", "52.25"),
+            ("didReceiveBodyPosition", "didReceivePastBodyPosition", "supine"),
+            ("didReceiveHeartRate", "didReceivePastHeartRate", "72"),
+            ("didReceiveRr", "didReceivePastRr", "800"),
+            ("didReceiveRespirationRate", "didReceivePastRespirationRate", "15"),
+            ("didReceiveSoundVolume", "didReceivePastSoundVolume", "60"),
+            ("didReceiveSteps", "didReceivePastSteps", "100"),
+            ("didReceiveSignalQuality", "didReceivePastSignalQuality", "87"),
+            ("didReceivePressure", "didReceivePastPressure", "1000"),
+        ]
+        let session = await connect()
+        let delegate = session.delegate
+        session.transport.lifecycle(pid: 1, processId: collectProcess)
+        session.transport.lifecycle(pid: 2, processId: syncProcess)
+
+        session.transport.reply(pid: 1, oneOfEach)
+        await waitUntil { delegate.dataCalls.count >= expected.count && delegate.events.count >= 4 }
+        let live = delegate.dataCalls
+        session.transport.reply(pid: 2, oneOfEach, options: 3 << 32) // NEXT_PACKAGE, nothing left
+        await waitUntil { delegate.dataCalls.count >= live.count + expected.count && delegate.events.count >= 8 }
+        let past = delegate.dataCalls.dropFirst(live.count)
+
+        XCTAssertEqual(live.map(\.method).sorted(), expected.map(\.live).sorted())
+        XCTAssertEqual(past.map(\.method).sorted(), expected.map(\.past).sorted())
+        for (liveMethod, pastMethod, value) in expected where value != nil {
+            XCTAssertEqual(live.first { $0.method == liveMethod }?.value, value, liveMethod)
+            XCTAssertEqual(past.first { $0.method == pastMethod }?.value, value, pastMethod)
+        }
+        let expectedEvents: [any DeviceEvent] = [false, true].flatMap { isPast -> [any DeviceEvent] in
+            [WearStateEvent(timestamp: 1_700_000_000_000, endTimestamp: 1_700_000_000_000, confidence: nil,
+                            isPast: isPast, wearState: .placedProperly),
+             PressureWearStateEvent(timestamp: 1_700_000_000_000, endTimestamp: 1_700_000_000_000, confidence: nil,
+                                    isPast: isPast, wearState: .detached),
+             ActivityEvent(timestamp: 1_700_000_000_000, endTimestamp: nil, confidence: nil, isPast: isPast,
+                           activity: .walking),
+             UserEvent(timestamp: 1_700_000_000_500, endTimestamp: 1_700_000_000_500, confidence: nil, isPast: isPast)]
+        }
+        XCTAssertEqual(delegate.events.map { "\($0)" }, expectedEvents.map { "\($0)" })
+        XCTAssertTrue(delegate.errors.isEmpty)
+    }
+
+    /// Connects a device running `firmware`; connect returns after didConnect.
     private func connect(firmware: String = "4.0.3") async -> Session {
         let transport = MockTransport(firmware: firmware)
         let session = Session(transport: transport, delegate: RecordingDelegate(), device: Device(transport: transport))
-        let connected = expectation(description: "didConnect")
-        session.delegate.onConnect = { _ in connected.fulfill() }
-        session.device.connect(delegate: session.delegate)
-        await fulfillment(of: [connected], timeout: 2)
-        session.delegate.onConnect = nil
+        do {
+            try await session.device.connect(delegate: session.delegate)
+        } catch {
+            XCTFail("connect failed: \(error)")
+        }
         return session
     }
 
@@ -279,6 +390,27 @@ final class DeviceTests: XCTestCase {
         XCTAssertEqual(session.transport.writesOffMainQueue, 0)
     }
 
+    func testStdoutDeliversPidBytesAndOptionsBeforeTermination() async throws {
+        let session = await connect()
+        let pid: UInt16 = 50000
+        session.transport.reply(pid: 0, [createSuccess, UInt8(truncatingIfNeeded: pid), UInt8(pid >> 8), 5])
+        let received = expectation(description: "streamed stdout")
+        session.delegate.onPayload = { _ in
+            if session.delegate.payloads.last?.pid == pid { received.fulfill() }
+        }
+        let bytes: [UInt8] = [0, 255, 10]
+        let options = UInt64.max
+        session.transport.reply(pid: pid, bytes, processType: 5, options: options)
+
+        await fulfillment(of: [received], timeout: 2)
+        let payload = try XCTUnwrap(session.delegate.payloads.last)
+        XCTAssertEqual(payload.pid, pid)
+        XCTAssertEqual(payload.payload, Data(bytes))
+        XCTAssertEqual(payload.options, options)
+        XCTAssertTrue(session.delegate.terminated.isEmpty)
+        session.delegate.onPayload = nil
+    }
+
     func testDisconnectFromInsideACoreCallbackEndsTheSessionOnce() async {
         let session = await connect()
         session.transport.disconnectsSynchronously = true
@@ -299,7 +431,7 @@ final class DeviceTests: XCTestCase {
         let delegate = session.delegate
         delegate.onDisconnect = { [unowned delegate] device in
             delegate.onConnect = { _ in reconnected.fulfill() }
-            device.connect(delegate: delegate)
+            Task { try await device.connect(delegate: delegate) }
         }
 
         session.device.disconnect()
@@ -442,6 +574,36 @@ final class DeviceTests: XCTestCase {
         XCTAssertEqual(pid, 2)
     }
 
+    func testCommandIgnoresTheRejectionOfAnEarlierUnknownCommand() async throws {
+        let session = await connect()
+        let transport = session.transport
+        transport.onHostFrame = { [unowned transport] frame in
+            transport.notify(ack)
+            if frame.text.hasPrefix("sync") {
+                // The shell rejects the unknown command after the next command went out.
+                transport.reply(pid: 0, [createFailure])
+                transport.lifecycle(pid: 2, processId: syncProcess)
+            }
+        }
+
+        try await session.device.send(Array("unknown_command\0".utf8))
+        let pid = try await session.device.startSynchronization()
+
+        XCTAssertEqual(pid, 2)
+    }
+
+    func testOneAddressHasOneConnectedDevice() async {
+        let session = await connect()
+        let other = Device(transport: session.transport)
+
+        do {
+            try await other.connect(delegate: RecordingDelegate())
+            XCTFail("a second Device connected to the same address")
+        } catch {
+            XCTAssertEqual((error as? AidlabError)?.message, "Another Device is connected to \(session.transport.address)")
+        }
+    }
+
     func testOutOfRangeProcessIdThrows() async {
         let session = await connect()
 
@@ -526,6 +688,49 @@ final class DeviceTests: XCTestCase {
         XCTAssertEqual(pid, 1)
     }
 
+    func testHistoricalA1TableFullRejectionFailsTheCommandAndAllowsRetry() async throws {
+        for (firmware, processId) in [("3.7.113", syncProcess), ("3.7.113", collectProcess),
+                                      ("3.7.93", collectProcess)] {
+            let session = await connect(firmware: firmware)
+            let transport = session.transport
+            let operation: () async throws -> UInt16? = {
+                if processId == syncProcess {
+                    return try await session.device.startSynchronization()
+                }
+                return try await session.device.collect(dataTypes: [.ecg], dataTypesToStore: [])
+            }
+            transport.onHostFrame = { [unowned transport] _ in
+                transport.lifecycle(pid: 0, processId: 0, status: createFailure)
+            }
+
+            let start = Date()
+            do {
+                _ = try await operation()
+                XCTFail("A full A1 process table must reject the command")
+            } catch {
+                XCTAssertEqual((error as? AidlabError)?.message, "Device refused to start the process")
+            }
+            XCTAssertLessThan(Date().timeIntervalSince(start), 1)
+            XCTAssertEqual(session.delegate.payloads.last?.pid, 0)
+            XCTAssertEqual(session.delegate.payloads.last?.payload, Data([createFailure, 0, 0, 0]))
+
+            transport.onHostFrame = { [unowned transport] _ in
+                // Unrelated typed failures and an untyped success must not answer this command.
+                transport.lifecycle(pid: 0, processId: processId == syncProcess ? collectProcess : syncProcess,
+                                    status: createFailure)
+                transport.lifecycle(pid: 10, processId: 0)
+                transport.lifecycle(pid: 3, processId: processId)
+                if firmware == "3.7.93" {
+                    transport.lifecycle(pid: 4, processId: syncProcess)
+                }
+            }
+            let pid = try await operation()
+            XCTAssertEqual(pid, 3)
+            XCTAssertEqual(transport.hostFrames.count, 2)
+            XCTAssertTrue(transport.hostFrames.allSatisfy { $0.pid == 0 })
+        }
+    }
+
     func testEndedCollectLeavesTheProcessTable() async throws {
         let session = await connect(firmware: "3.7.107")
         let transport = session.transport
@@ -543,6 +748,19 @@ final class DeviceTests: XCTestCase {
 
         XCTAssertEqual(pid, 3)
         XCTAssertEqual(transport.hostFrames.last?.pid, 0)
+    }
+
+    func testCollectRejectsADataTypeTheFirmwareDoesNotSupport() async {
+        let session = await connect(firmware: "3.7.113")
+
+        do {
+            _ = try await session.device.collect(dataTypes: [.ecg], dataTypesToStore: [.eda])
+            XCTFail("Firmware 3.7.113 has no EDA")
+        } catch {
+            XCTAssertEqual((error as? AidlabError)?.message, "Firmware 3.7.113 does not support eda")
+        }
+
+        XCTAssertTrue(session.transport.hostFrames.isEmpty)
     }
 
     func testLegacyFirmwareCannotStoreSoundVolume() async {
@@ -567,13 +785,100 @@ final class DeviceTests: XCTestCase {
         let transport = MockTransport(firmware: "4.0")
         let delegate = RecordingDelegate()
         let device = Device(transport: transport)
-        let disconnected = expectation(description: "didDisconnect")
-        delegate.onDisconnect = { _ in disconnected.fulfill() }
 
-        device.connect(delegate: delegate)
-
-        await fulfillment(of: [disconnected], timeout: 2)
+        do {
+            try await device.connect(delegate: delegate)
+            XCTFail("connect accepted a revision that the core rejects")
+        } catch {
+            XCTAssertEqual((error as? AidlabError)?.message, "Unsupported firmware revision 4.0")
+        }
         XCTAssertEqual(delegate.connects, 0)
-        XCTAssertEqual(delegate.disconnects, [.unknownError])
+        XCTAssertEqual(delegate.disconnects, [])
+    }
+
+    func testOnDeviceAnalysisEventsCarryTheirWfdbFieldsAndModelVersion() {
+        let start: UInt64 = 1_700_000_000_000
+        let cases: [((any DeviceEvent)?, any DeviceEvent)] = [
+            (decodedEvent(5, code: 5, end: start, confidence: 0.875, modelVersion: 0x0201_0003, past: true),
+             EcgEvent(timestamp: start, endTimestamp: start, confidence: 0.875, isPast: true, anntyp: 5, subtyp: 0, aux: nil, rhythm: nil, modelVersion: "2.1.3")),
+            (decodedEvent(5, code: 28, confidence: 0.75, modelVersion: 0x0201_0003, aux: "(AFIB"),
+             EcgEvent(timestamp: start, endTimestamp: nil, confidence: 0.75, isPast: false, anntyp: 28, subtyp: 0, aux: "(AFIB", rhythm: .atrialFibrillation, modelVersion: "2.1.3")),
+            (decodedEvent(5, code: 28, end: start + 30000, confidence: 0.8, modelVersion: 0x0201_0003, aux: "(AFIB"),
+             EcgEvent(timestamp: start, endTimestamp: start + 30000, confidence: 0.8, isPast: false, anntyp: 28, subtyp: 0, aux: "(AFIB", rhythm: .atrialFibrillation, modelVersion: "2.1.3")),
+            (decodedEvent(5, code: 14, end: start + 30000, subtyp: 0x10),
+             EcgEvent(timestamp: start, endTimestamp: start + 30000, confidence: nil, isPast: false, anntyp: 14, subtyp: 16, aux: nil, rhythm: .noise, modelVersion: nil)),
+            (decodedEvent(6, code: 0, end: start + 1000, modelVersion: 0x0201_0003),
+             SleepEvent(timestamp: start, endTimestamp: start + 1000, confidence: nil, isPast: false, period: .night, modelVersion: "2.1.3")),
+        ]
+        for (decoded, expected) in cases {
+            XCTAssertEqual(decoded.map { "\($0)" }, "\(expected)")
+        }
+        // Types this SDK version does not know: 7 of older development firmware and 8 of a later core.
+        XCTAssertNil(decodedEvent(7, code: 6 << 8 | 1))
+        XCTAssertNil(decodedEvent(8, code: 0))
+    }
+
+    func testEcgRhythmFollowsTheWfdbAnnotation() {
+        let cases: [(anntyp: Int32, aux: String?, subtyp: Int8, rhythm: EcgRhythm?)] = [
+            (28, "(AFIB", 0, .atrialFibrillation),
+            (28, "(SBR", 0, .sinusBradycardia),
+            (28, "(N", 0, .normalSinus),
+            (14, nil, 0x10, .noise),
+            (14, nil, 0x01, .noise),
+            (14, nil, 0, .unknown),
+            (28, "(VT", 0, .unknown),
+            (28, nil, 0, .unknown),
+            (1, nil, 0, nil),
+            (5, nil, 0, nil),
+            (13, nil, 0, nil),
+            (16, nil, 0, nil),
+        ]
+        for (anntyp, aux, subtyp, rhythm) in cases {
+            let event = decodedEvent(5, code: anntyp, aux: aux, subtyp: subtyp) as? EcgEvent
+            XCTAssertNotNil(event)
+            XCTAssertEqual(event?.rhythm, rhythm, "\(anntyp) \(aux ?? "nil") \(subtyp)")
+        }
+    }
+
+    func testSleepPeriodFollowsTheCode() {
+        let cases: [(code: Int32, period: SleepPeriod)] = [
+            (0, .night), (1, .wake), (2, .light), (3, .deep), (4, .rem), (5, .unknown), (-1, .unknown),
+        ]
+        for (code, period) in cases {
+            XCTAssertEqual((decodedEvent(6, code: code) as? SleepEvent)?.period, period, "\(code)")
+        }
+    }
+
+    func testCollectEventsNeedAidlab2() async throws {
+        let session = await connect(firmware: "3.7.113")
+
+        do {
+            _ = try await session.device.collect(dataTypes: [.ecg], dataTypesToStore: [.eda],
+                                                 events: [.ecg, .sleep])
+            XCTFail("Aidlab 1 detects no events")
+        } catch {
+            XCTAssertEqual((error as? AidlabError)?.message,
+                           "Firmware 3.7.113 does not support ecg, eda, sleep")
+        }
+
+        XCTAssertTrue(session.transport.hostFrames.isEmpty)
+
+        let withoutEvents = await connect(firmware: "3.7.113")
+        acknowledgeCommands(withoutEvents.transport, pid: 1, processId: collectProcess)
+        _ = try await withoutEvents.device.collect(dataTypes: [.ecg], dataTypesToStore: [.heartRate])
+        XCTAssertEqual(withoutEvents.transport.hostFrames.map(\.text), ["collect flags 00000001 00000100"])
+    }
+
+    func testAidlab2CollectAlwaysSendsTheEventsMask() async throws {
+        let withEvents = await connect(firmware: "4.0.3")
+        acknowledgeCommands(withEvents.transport, pid: 1, processId: collectProcess)
+        _ = try await withEvents.device.collect(dataTypes: [.ecg], dataTypesToStore: [.heartRate],
+                                                events: [.ecg, .sleep])
+        XCTAssertEqual(withEvents.transport.hostFrames.map(\.text), ["collect flags 00000001 00000100 00000060"])
+
+        let withoutEvents = await connect(firmware: "4.0.3")
+        acknowledgeCommands(withoutEvents.transport, pid: 1, processId: collectProcess)
+        _ = try await withoutEvents.device.collect(dataTypes: [.ecg], dataTypesToStore: [.heartRate])
+        XCTAssertEqual(withoutEvents.transport.hostFrames.map(\.text), ["collect flags 00000001 00000100 00000000"])
     }
 }
