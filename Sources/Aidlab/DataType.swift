@@ -6,12 +6,12 @@
 import Foundation
 
 public enum DataType: Int, Sendable {
-    // Raw values 4, 9, and 13 are reserved by the device protocol.
+    // Raw values 4, 5, 9 and 13 are reserved by the device protocol; 5 is activity, which collect adds for
+    // DeviceEventType.activity.
     case ecg = 0
     case respiration = 1
     case skinTemperature = 2
     case motion = 3
-    case activity = 5
     case orientation = 6
     case steps = 7
     case heartRate = 8

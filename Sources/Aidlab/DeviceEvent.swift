@@ -150,7 +150,8 @@ public enum EcgRhythm: Sendable {
     case unknown
 }
 
-/// A period of a night analyzed by the device, reported once the night closes.
+/// A period of a night analyzed by the device, reported once the night closes. A night is its periods: sleep onset is
+/// the start of its first period and the final wake is the end of its last.
 public struct SleepEvent: DeviceEvent {
     public let timestamp: UInt64
     public let endTimestamp: UInt64?
@@ -171,15 +172,15 @@ public struct SleepEvent: DeviceEvent {
     }
 }
 
-public enum SleepPeriod: Sendable {
-    /// Sleep onset to the final wake.
-    case night
-    case wake
-    case light
-    case deep
-    case rem
+/// A period of a night; the raw value is the stage code the device reports.
+public enum SleepPeriod: Int, Sendable {
+    /// Awake, including waking during the night.
+    case wake = 2
+    case light = 3
+    case deep = 4
+    case rem = 5
     /// A period that this SDK version does not know.
-    case unknown
+    case unknown = -1
 }
 
 /// Converts a core event, or returns `nil` for an event type that this binding does not know.
@@ -211,7 +212,7 @@ func makeDeviceEvent(_ event: AidlabEvent, past: Bool) -> (any DeviceEvent)? {
                  rhythm: EcgRhythm(anntyp: event.code, subtyp: event.subtyp, aux: aux), modelVersion: model)
     case AidlabSDK.eventTypeSleep:
         SleepEvent(timestamp: timestamp, endTimestamp: end, confidence: confidence, isPast: past,
-                   period: SleepPeriod(code: event.code), modelVersion: model)
+                   period: SleepPeriod(rawValue: Int(event.code)) ?? .unknown, modelVersion: model)
     default:
         nil
     }
@@ -238,19 +239,6 @@ private extension EcgRhythm {
         case (14, _) where subtyp != 0: self = .noise
         case (14, _), (28, _): self = .unknown
         default: return nil
-        }
-    }
-}
-
-private extension SleepPeriod {
-    init(code: Int32) {
-        switch code {
-        case 0: self = .night
-        case 1: self = .wake
-        case 2: self = .light
-        case 3: self = .deep
-        case 4: self = .rem
-        default: self = .unknown
         }
     }
 }

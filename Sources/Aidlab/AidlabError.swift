@@ -20,11 +20,19 @@ public final class AidlabError: NSObject, LocalizedError {
     public let code: Code
     public let message: String
     public let underlyingError: Error?
+    /// Why the device rejected the command, or `nil` when the error is not a rejection.
+    public let rejectionReason: RejectionReason?
 
-    public init(code: Code = .sdk, message: String, underlyingError: Error? = nil) {
+    public init(
+        code: Code = .sdk,
+        message: String,
+        underlyingError: Error? = nil,
+        rejectionReason: RejectionReason? = nil
+    ) {
         self.code = code
         self.message = message
         self.underlyingError = underlyingError
+        self.rejectionReason = rejectionReason
         super.init()
     }
 
@@ -45,5 +53,48 @@ public final class AidlabError: NSObject, LocalizedError {
 
     public var errorDescription: String? {
         description
+    }
+}
+
+/// Why the device rejected a command.
+public enum RejectionReason: Int, Sendable {
+    /// `ENOENT`: the device does not know the command.
+    case unknownCommand = 1
+    /// `EAGAIN`: no free process slot.
+    case noFreeSlot = 2
+    /// `ENOMEM`: the device is out of memory.
+    case outOfMemory = 3
+    /// `E2BIG`: the command is too long.
+    case commandTooLong = 4
+    /// `EINVAL`: a running service rejected the arguments.
+    case invalidArgument = 5
+    /// `EBUSY`: the command conflicts with the device state, e.g. `sync clear` during a sync.
+    case busy = 6
+    /// `ESRCH`: `kill` found no such process.
+    case noSuchProcess = 7
+    /// `EPERM`: `kill` is not permitted.
+    case notPermitted = 8
+    /// `ENOTCONN`: no client or a stale session.
+    case notConnected = 9
+    /// `ESHUTDOWN`: the process manager is stopping.
+    case shuttingDown = 10
+    /// The firmware does not report the reason, or this SDK version does not know it.
+    case unknown = -1
+
+    /// The cause as a rejection message reads it, e.g. "invalid arguments".
+    var text: String {
+        switch self {
+        case .unknownCommand: "unknown command"
+        case .noFreeSlot: "no free process slot"
+        case .outOfMemory: "out of memory"
+        case .commandTooLong: "command too long"
+        case .invalidArgument: "invalid arguments"
+        case .busy: "busy"
+        case .noSuchProcess: "no such process"
+        case .notPermitted: "not permitted"
+        case .notConnected: "not connected"
+        case .shuttingDown: "shutting down"
+        case .unknown: "unknown reason"
+        }
     }
 }

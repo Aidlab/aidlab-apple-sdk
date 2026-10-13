@@ -57,20 +57,20 @@ enum HealthThermometerService {
     static var temperatureMeasurementCharacteristic: CBUUID { makeUUID("2A1C") }
 }
 
-var dataTypesUUID: [DataType: CBUUID] {
+var dataTypesUUID: [Int: CBUUID] {
     [
-        DataType.activity: MotionService.activityUUID,
-        DataType.steps: MotionService.stepsUUID,
-        DataType.orientation: MotionService.orientationUUID,
-        DataType.bodyPosition: MotionService.orientationUUID,
-        DataType.heartRate: HeartRateService.heartRateMeasurementCharacteristic,
-        DataType.rr: HeartRateService.heartRateMeasurementCharacteristic,
-        DataType.soundVolume: soundVolumeCharacteristicUUID,
-        DataType.pressure: nasalCannulaCharacteristicUUID,
-        DataType.skinTemperature: temperatureCharacteristicUUID,
-        DataType.motion: motionCharacteristicUUID,
-        DataType.ecg: ecgCharacteristicUUID,
-        DataType.respiration: respirationCharacteristicUUID,
-        DataType.respirationRate: respirationCharacteristicUUID,
+        Device.activityData: MotionService.activityUUID,
+        DataType.steps.rawValue: MotionService.stepsUUID,
+        DataType.orientation.rawValue: MotionService.orientationUUID,
+        DataType.bodyPosition.rawValue: MotionService.orientationUUID,
+        DataType.heartRate.rawValue: HeartRateService.heartRateMeasurementCharacteristic,
+        DataType.rr.rawValue: HeartRateService.heartRateMeasurementCharacteristic,
+        DataType.soundVolume.rawValue: soundVolumeCharacteristicUUID,
+        DataType.pressure.rawValue: nasalCannulaCharacteristicUUID,
+        DataType.skinTemperature.rawValue: temperatureCharacteristicUUID,
+        DataType.motion.rawValue: motionCharacteristicUUID,
+        DataType.ecg.rawValue: ecgCharacteristicUUID,
+        DataType.respiration.rawValue: respirationCharacteristicUUID,
+        DataType.respirationRate.rawValue: respirationCharacteristicUUID,
     ]
 }

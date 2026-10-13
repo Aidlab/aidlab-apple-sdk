@@ -10,14 +10,16 @@ import XCTest
 private let commandCharacteristic = CBUUID(string: "51366E80-CF3A-11E1-9AB4-0002A5D5C51B")
 private let ack: [UInt8] = [0x06]
 
-private let createSuccess: UInt8 = 0
-private let createFailure: UInt8 = 1
-private let killSuccess: UInt8 = 2
+private let accepted: UInt8 = 0
+private let rejected: UInt8 = 1
+private let exited: UInt8 = 2
 private let syncProcess: UInt8 = 7
 private let collectProcess: UInt8 = 8
 
 /// A command frame that the device received from the SDK.
 private struct HostFrame {
+    /// The whole frame, header included.
+    let bytes: [UInt8]
     let pid: UInt16
     let flags: UInt8
     let reserved: UInt8
@@ -123,7 +125,7 @@ private final class MockTransport: AidlabTransport, @unchecked Sendable {
         }
     }
 
-    func lifecycle(pid: UInt8, processId: UInt8, status: UInt8 = createSuccess) {
+    func lifecycle(pid: UInt8, processId: UInt8, status: UInt8 = accepted) {
         reply(pid: 0, [status, pid, 0, processId])
     }
 
@@ -144,6 +146,7 @@ private final class MockTransport: AidlabTransport, @unchecked Sendable {
         let headerSize = usesV4 ? 20 : 7
         let payload = frame[headerSize...].filter { $0 != 0 }
         let hostFrame = HostFrame(
+            bytes: frame,
             pid: UInt16(frame[5]) | (UInt16(frame[6]) << 8),
             flags: usesV4 ? frame[16] : 0,
             reserved: usesV4 ? frame[2] : 0,
@@ -159,7 +162,7 @@ private final class RecordingDelegate: DeviceDelegate, @unchecked Sendable {
     var connects = 0
     var disconnects: [DisconnectReason] = []
     var errors: [AidlabError] = []
-    var terminated: [UInt16] = []
+    var exits: [(pid: UInt16, status: Int?)] = []
     var syncStates: [SyncState] = []
     var onSyncState: (() -> Void)?
     var onConnect: ((Device) -> Void)?
@@ -188,13 +191,13 @@ private final class RecordingDelegate: DeviceDelegate, @unchecked Sendable {
         errors.append(error)
     }
 
-    func didReceivePayload(_ device: Device, pid: UInt16, payload: Data, options: UInt64) {
+    func didReceiveProcessOutput(_ device: Device, pid: UInt16, payload: Data, options: UInt64) {
         payloads.append((pid, payload, options))
         onPayload?(device)
     }
 
-    func processDidTerminate(_: Device, pid: UInt16) {
-        terminated.append(pid)
+    func processDidExit(_: Device, pid: UInt16, exitStatus: Int?) {
+        exits.append((pid, exitStatus))
     }
 
     func didReceiveECG(_: Device, timestamp _: UInt64, value: Float) { record(value) }
@@ -299,13 +302,17 @@ final class DeviceTests: XCTestCase {
         XCTAssertTrue(session.delegate.errors.isEmpty)
     }
 
-    func testCollectedDataIsLiveAndSynchronizedDataIsPast() async throws {
-        // One serialized session that the core decodes into one sample of each of 18 data types, wear states of the
-        // electrodes and the cannula, an activity that goes on, and a user event.
+    /// One serialized session that the core decodes into one sample of each of 18 data types, wear states of the
+    /// electrodes and the cannula, an activity that goes on, and a user event.
+    private func oneOfEachSession() throws -> [UInt8] {
         let hex = Array("0068e5cf8b010000e86be5cf8b01000000030000000103000000010200740e010048020020030200003c0400000003e8000012001000f80004000800f000008001e0fd8000500e00000000000000400000000000000001000204006400000002000f000800f469e5cf8b0100000100020100570c000000018bcfe568644020000020000000018bcfe568c84251000041a8000042c800003fc0000042b400003f400000")
-        let oneOfEach = try stride(from: 0, to: hex.count, by: 2).map {
+        return try stride(from: 0, to: hex.count, by: 2).map {
             try XCTUnwrap(UInt8(String(hex[$0 ... $0 + 1]), radix: 16))
         }
+    }
+
+    func testCollectedDataIsLiveAndSynchronizedDataIsPast() async throws {
+        let oneOfEach = try oneOfEachSession()
         let expected: [(live: String, past: String, value: String?)] = [
             ("didReceiveECG", "didReceivePastECG", nil),
             ("didReceiveRespiration", "didReceivePastRespiration", nil),
@@ -328,14 +335,15 @@ final class DeviceTests: XCTestCase {
         ]
         let session = await connect()
         let delegate = session.delegate
-        session.transport.lifecycle(pid: 1, processId: collectProcess)
+        acknowledgeCommands(session.transport, pid: 1, processId: collectProcess)
+        _ = try await session.device.collect(dataTypes: [], dataTypesToStore: [], events: [.wearState, .activity, .user])
         session.transport.lifecycle(pid: 2, processId: syncProcess)
 
         session.transport.reply(pid: 1, oneOfEach)
-        await waitUntil { delegate.dataCalls.count >= expected.count && delegate.events.count >= 4 }
+        await waitUntil { delegate.dataCalls.count >= expected.count && delegate.events.count >= 3 }
         let live = delegate.dataCalls
         session.transport.reply(pid: 2, oneOfEach, options: 3 << 32) // NEXT_PACKAGE, nothing left
-        await waitUntil { delegate.dataCalls.count >= live.count + expected.count && delegate.events.count >= 8 }
+        await waitUntil { delegate.dataCalls.count >= live.count + expected.count && delegate.events.count >= 7 }
         let past = delegate.dataCalls.dropFirst(live.count)
 
         XCTAssertEqual(live.map(\.method).sorted(), expected.map(\.live).sorted())
@@ -344,6 +352,7 @@ final class DeviceTests: XCTestCase {
             XCTAssertEqual(live.first { $0.method == liveMethod }?.value, value, liveMethod)
             XCTAssertEqual(past.first { $0.method == pastMethod }?.value, value, pastMethod)
         }
+        // Collect does not list the pressure wear state, so it arrives only through synchronization.
         let expectedEvents: [any DeviceEvent] = [false, true].flatMap { isPast -> [any DeviceEvent] in
             [WearStateEvent(timestamp: 1_700_000_000_000, endTimestamp: 1_700_000_000_000, confidence: nil,
                             isPast: isPast, wearState: .placedProperly),
@@ -352,9 +361,60 @@ final class DeviceTests: XCTestCase {
              ActivityEvent(timestamp: 1_700_000_000_000, endTimestamp: nil, confidence: nil, isPast: isPast,
                            activity: .walking),
              UserEvent(timestamp: 1_700_000_000_500, endTimestamp: 1_700_000_000_500, confidence: nil, isPast: isPast)]
-        }
+        }.filter { $0.isPast || !($0 is PressureWearStateEvent) }
         XCTAssertEqual(delegate.events.map { "\($0)" }, expectedEvents.map { "\($0)" })
         XCTAssertTrue(delegate.errors.isEmpty)
+    }
+
+    func testRejectedCollectKeepsTheEventsOfThePreviousOne() async throws {
+        let session = await connect()
+        let transport = session.transport
+        transport.onHostFrame = { [unowned transport] _ in
+            transport.notify(ack)
+            if transport.hostFrames.count == 1 {
+                transport.lifecycle(pid: 1, processId: collectProcess)
+            } else {
+                transport.reply(pid: 0, [rejected, 0, 0, collectProcess, 5])
+            }
+        }
+        _ = try await session.device.collect(dataTypes: [], dataTypesToStore: [], events: [.wearState])
+        do {
+            _ = try await session.device.collect(dataTypes: [], dataTypesToStore: [], events: [.activity])
+            XCTFail("The device rejected the second collect")
+        } catch {}
+
+        transport.reply(pid: 1, try oneOfEachSession())
+
+        await waitUntil { !session.delegate.events.isEmpty }
+        XCTAssertEqual(session.delegate.events.map { "\(type(of: $0))" }, ["WearStateEvent"])
+    }
+
+    func testEmptyPayloadReachesAProcessButNotTheShell() async throws {
+        let pid: UInt16 = 0x1234
+        for firmware in ["3.7.113", "4.0.3"] {
+            let session = await connect(firmware: firmware)
+            let transport = session.transport
+            transport.onHostFrame = { [unowned transport] frame in
+                if frame.flags & 0x04 != 0 {
+                    transport.notify(ack)
+                }
+            }
+
+            try await session.device.send([], processId: Int(pid))
+            do {
+                try await session.device.send([])
+                XCTFail("The shell takes only commands")
+            } catch {}
+
+            // A header with payload size 0 and the PID.
+            let frames = transport.hostFrames.map(\.bytes)
+            if firmware.hasPrefix("4.") {
+                XCTAssertEqual(frames.map(\.count), [20])
+                XCTAssertEqual(frames.first.map { Array($0[3 ... 6]) }, [0, 0, 0x34, 0x12])
+            } else {
+                XCTAssertEqual(frames, [[3, 0x0A, 1, 7, 0, 0x34, 0x12]])
+            }
+        }
     }
 
     /// Connects a device running `firmware`; connect returns after didConnect.
@@ -390,10 +450,10 @@ final class DeviceTests: XCTestCase {
         XCTAssertEqual(session.transport.writesOffMainQueue, 0)
     }
 
-    func testStdoutDeliversPidBytesAndOptionsBeforeTermination() async throws {
+    func testStdoutDeliversPidBytesAndOptionsBeforeExit() async throws {
         let session = await connect()
         let pid: UInt16 = 50000
-        session.transport.reply(pid: 0, [createSuccess, UInt8(truncatingIfNeeded: pid), UInt8(pid >> 8), 5])
+        session.transport.reply(pid: 0, [accepted, UInt8(truncatingIfNeeded: pid), UInt8(pid >> 8), 5])
         let received = expectation(description: "streamed stdout")
         session.delegate.onPayload = { _ in
             if session.delegate.payloads.last?.pid == pid { received.fulfill() }
@@ -407,8 +467,19 @@ final class DeviceTests: XCTestCase {
         XCTAssertEqual(payload.pid, pid)
         XCTAssertEqual(payload.payload, Data(bytes))
         XCTAssertEqual(payload.options, options)
-        XCTAssertTrue(session.delegate.terminated.isEmpty)
+        XCTAssertTrue(session.delegate.exits.isEmpty)
         session.delegate.onPayload = nil
+    }
+
+    func testExitReportsTheExitStatusWhenTheFirmwareSendsIt() async {
+        let session = await connect()
+
+        session.transport.reply(pid: 0, [exited, 5, 0, collectProcess, 143])
+        session.transport.lifecycle(pid: 6, processId: syncProcess, status: exited)
+
+        await waitUntil { session.delegate.exits.count == 2 }
+        XCTAssertEqual(session.delegate.exits.map(\.pid), [5, 6])
+        XCTAssertEqual(session.delegate.exits.map(\.status), [143, nil])
     }
 
     func testDisconnectFromInsideACoreCallbackEndsTheSessionOnce() async {
@@ -535,18 +606,13 @@ final class DeviceTests: XCTestCase {
         XCTAssertEqual(transport.hostFrames.map(\.text), ["kill 5"])
     }
 
-    func testSyncThatEndsBeforeItsStopArrivesIsStopped() async throws {
+    func testSyncStopsThroughTheShell() async throws {
         let session = await connect()
         let transport = session.transport
-        transport.onHostFrame = { [unowned transport] frame in
-            if frame.text.hasPrefix("sync fast") {
-                transport.notify(ack)
-                transport.lifecycle(pid: 4, processId: syncProcess)
-            } else {
-                // The sync ended on its own, so the device refuses the frame addressed to it.
-                transport.notify([0x15, 12])
-                transport.lifecycle(pid: 4, processId: syncProcess, status: killSuccess)
-            }
+        transport.onHostFrame = { [unowned transport] _ in
+            transport.notify(ack)
+            // The shell answers `sync stop` like a built-in, with the sync PID; its `exited` follows.
+            transport.lifecycle(pid: 4, processId: syncProcess)
         }
 
         let started = try await session.device.startSynchronization()
@@ -554,6 +620,66 @@ final class DeviceTests: XCTestCase {
 
         XCTAssertEqual(started, 4)
         XCTAssertEqual(stopped, 4)
+        XCTAssertEqual(transport.hostFrames.map(\.pid), [0, 0])
+    }
+
+    func testStopOfASyncThatEndedReturnsNil() async throws {
+        let session = await connect()
+        let transport = session.transport
+        transport.onHostFrame = { [unowned transport] frame in
+            transport.notify(ack)
+            // The sync ended before its stop arrived, so the shell accepts the stop with PID 0.
+            transport.lifecycle(pid: frame.text == "sync stop" ? 0 : 4, processId: syncProcess)
+        }
+
+        _ = try await session.device.startSynchronization()
+        let stopped = try await session.device.stopSynchronization()
+
+        XCTAssertNil(stopped)
+        XCTAssertEqual(transport.hostFrames.map(\.text), ["sync fast", "sync stop"])
+    }
+
+    func testAidlab1KillFailureRejectsTheStopWithNoSuchProcess() async throws {
+        let session = await connect(firmware: "3.7.113")
+        let transport = session.transport
+        transport.onHostFrame = { [unowned transport] frame in
+            // Aidlab 1 answers a stop of a sync that already ended with kill_failure (status 3).
+            transport.lifecycle(pid: 4, processId: syncProcess, status: frame.pid == 0 ? accepted : 3)
+        }
+        _ = try await session.device.startSynchronization()
+
+        do {
+            _ = try await session.device.stopSynchronization()
+            XCTFail("kill_failure must reject the stop")
+        } catch let error as AidlabError {
+            XCTAssertEqual(error.rejectionReason, .noSuchProcess)
+            XCTAssertEqual(error.message, "sync: no such process")
+        }
+        XCTAssertEqual(transport.hostFrames.map(\.pid), [0, 4])
+    }
+
+    func testRejectionCarriesItsReason() async throws {
+        let session = await connect()
+        let transport = session.transport
+        let cases: [(answer: [UInt8], reason: RejectionReason, message: String)] = [
+            ([rejected, 0, 0, collectProcess, 5], .invalidArgument, "collect: invalid arguments"),
+            // Released firmware sends no reason byte.
+            ([rejected, 0, 0, collectProcess], .unknown, "collect: unknown reason"),
+        ]
+        for (answer, reason, message) in cases {
+            transport.onHostFrame = { [unowned transport] _ in
+                transport.notify(ack)
+                transport.reply(pid: 0, answer)
+            }
+
+            do {
+                _ = try await session.device.collect(dataTypes: [.ecg], dataTypesToStore: [])
+                XCTFail("\(answer) must reject collect")
+            } catch let error as AidlabError {
+                XCTAssertEqual(error.rejectionReason, reason)
+                XCTAssertEqual(error.message, message)
+            }
+        }
     }
 
     func testCommandIgnoresTheProcessOfAnEarlierRawCommand() async throws {
@@ -575,21 +701,24 @@ final class DeviceTests: XCTestCase {
     }
 
     func testCommandIgnoresTheRejectionOfAnEarlierUnknownCommand() async throws {
-        let session = await connect()
-        let transport = session.transport
-        transport.onHostFrame = { [unowned transport] frame in
-            transport.notify(ack)
-            if frame.text.hasPrefix("sync") {
-                // The shell rejects the unknown command after the next command went out.
-                transport.reply(pid: 0, [createFailure])
-                transport.lifecycle(pid: 2, processId: syncProcess)
+        // Released firmware rejects an unknown command with one byte, the 2.8.0 model with ENOENT and no process.
+        for unknownCommandRejection: [UInt8] in [[rejected], [rejected, 0, 0, 0xFF, 1]] {
+            let session = await connect()
+            let transport = session.transport
+            transport.onHostFrame = { [unowned transport] frame in
+                transport.notify(ack)
+                if frame.text.hasPrefix("sync") {
+                    // The shell rejects the unknown command after the next command went out.
+                    transport.reply(pid: 0, unknownCommandRejection)
+                    transport.lifecycle(pid: 2, processId: syncProcess)
+                }
             }
+
+            try await session.device.send(Array("unknown_command\0".utf8))
+            let pid = try await session.device.startSynchronization()
+
+            XCTAssertEqual(pid, 2)
         }
-
-        try await session.device.send(Array("unknown_command\0".utf8))
-        let pid = try await session.device.startSynchronization()
-
-        XCTAssertEqual(pid, 2)
     }
 
     func testOneAddressHasOneConnectedDevice() async {
@@ -626,6 +755,24 @@ final class DeviceTests: XCTestCase {
         XCTAssertEqual(session.transport.hostFrames.first?.pid, 0)
     }
 
+    func testOnlyAidlab1UpTo3_7_113SendsCollectToTheCollectPid() async throws {
+        let cases: [(firmware: String, pids: [UInt16])] = [
+            ("3.7.113", [0, 1, 1]), ("3.7.114", [0, 0, 0]), ("4.0.3", [0, 0, 0]),
+        ]
+        for (firmware, pids) in cases {
+            let session = await connect(firmware: firmware)
+            acknowledgeCommands(session.transport, pid: 1, processId: collectProcess)
+
+            _ = try await session.device.collect(dataTypes: [.ecg], dataTypesToStore: [])
+            let collected = try await session.device.collect(dataTypes: [.ecg], dataTypesToStore: [])
+            let stopped = try await session.device.stopCollect()
+
+            XCTAssertEqual(collected, 1, firmware)
+            XCTAssertEqual(stopped, 1, firmware)
+            XCTAssertEqual(session.transport.hostFrames.map(\.pid), pids, firmware)
+        }
+    }
+
     func testFirmwareWithoutProcessesTakesCommandsWithoutLifecycle() async throws {
         let session = await connect(firmware: "2.2.12")
         let start = Date()
@@ -645,14 +792,15 @@ final class DeviceTests: XCTestCase {
         }
 
         _ = try await session.device.collect(dataTypes: [.rr, .bodyPosition, .respirationRate, .pressure],
-                                             dataTypesToStore: [.ecg, .rr])
+                                             dataTypesToStore: [.ecg, .rr], events: [.activity])
 
         XCTAssertEqual(transport.hostFrames.map(\.text), [
             "sync enable ecg", "sync disable respir", "sync disable temper", "sync enable heartR",
-            "sync disable orient", "sync disable accel", "sync disable activi", "sync disable steps",
+            "sync disable orient", "sync disable accel", "sync enable activi", "sync disable steps",
         ])
         let expected = ["2A37", "63366E80-CF3A-11E1-9AB4-0002A5D5C51B", "48366E80-CF3A-11E1-9AB4-0002A5D5C51B",
-                        "53366E80-CF3A-11E1-9AB4-0002A5D5C51B", "47366E80-CF3A-11E1-9AB4-0002A5D5C51B"]
+                        "53366E80-CF3A-11E1-9AB4-0002A5D5C51B", "47366E80-CF3A-11E1-9AB4-0002A5D5C51B",
+                        "61366E80-CF3A-11E1-9AB4-0002A5D5C51B"]
         for uuid in expected {
             XCTAssertTrue(transport.subscriptions.contains(CBUUID(string: uuid)), uuid)
         }
@@ -680,7 +828,7 @@ final class DeviceTests: XCTestCase {
         transport.onHostFrame = { [unowned transport] _ in
             transport.lifecycle(pid: 1, processId: collectProcess)
             // Firmware 3.7.84-3.7.110 starts a sync with collect and refuses it while another sync runs.
-            transport.lifecycle(pid: 0, processId: syncProcess, status: createFailure)
+            transport.lifecycle(pid: 0, processId: syncProcess, status: rejected)
         }
 
         let pid = try await session.device.collect(dataTypes: [.ecg], dataTypesToStore: [])
@@ -700,7 +848,7 @@ final class DeviceTests: XCTestCase {
                 return try await session.device.collect(dataTypes: [.ecg], dataTypesToStore: [])
             }
             transport.onHostFrame = { [unowned transport] _ in
-                transport.lifecycle(pid: 0, processId: 0, status: createFailure)
+                transport.lifecycle(pid: 0, processId: 0, status: rejected)
             }
 
             let start = Date()
@@ -708,16 +856,17 @@ final class DeviceTests: XCTestCase {
                 _ = try await operation()
                 XCTFail("A full A1 process table must reject the command")
             } catch {
-                XCTAssertEqual((error as? AidlabError)?.message, "Device refused to start the process")
+                XCTAssertEqual((error as? AidlabError)?.message,
+                               "\(processId == syncProcess ? "sync" : "collect"): unknown reason")
             }
             XCTAssertLessThan(Date().timeIntervalSince(start), 1)
             XCTAssertEqual(session.delegate.payloads.last?.pid, 0)
-            XCTAssertEqual(session.delegate.payloads.last?.payload, Data([createFailure, 0, 0, 0]))
+            XCTAssertEqual(session.delegate.payloads.last?.payload, Data([rejected, 0, 0, 0]))
 
             transport.onHostFrame = { [unowned transport] _ in
                 // Unrelated typed failures and an untyped success must not answer this command.
                 transport.lifecycle(pid: 0, processId: processId == syncProcess ? collectProcess : syncProcess,
-                                    status: createFailure)
+                                    status: rejected)
                 transport.lifecycle(pid: 10, processId: 0)
                 transport.lifecycle(pid: 3, processId: processId)
                 if firmware == "3.7.93" {
@@ -741,8 +890,8 @@ final class DeviceTests: XCTestCase {
         }
         _ = try await session.device.collect(dataTypes: [.ecg], dataTypesToStore: [])
         // Firmware before 3.7.113 reports the ended collect process with a wrong process ID.
-        transport.lifecycle(pid: 1, processId: 1, status: killSuccess)
-        await waitUntil { session.delegate.terminated == [1] }
+        transport.lifecycle(pid: 1, processId: 1, status: exited)
+        await waitUntil { session.delegate.exits.map(\.pid) == [1] }
 
         let pid = try await session.device.collect(dataTypes: [.ecg], dataTypesToStore: [])
 
@@ -807,8 +956,8 @@ final class DeviceTests: XCTestCase {
              EcgEvent(timestamp: start, endTimestamp: start + 30000, confidence: 0.8, isPast: false, anntyp: 28, subtyp: 0, aux: "(AFIB", rhythm: .atrialFibrillation, modelVersion: "2.1.3")),
             (decodedEvent(5, code: 14, end: start + 30000, subtyp: 0x10),
              EcgEvent(timestamp: start, endTimestamp: start + 30000, confidence: nil, isPast: false, anntyp: 14, subtyp: 16, aux: nil, rhythm: .noise, modelVersion: nil)),
-            (decodedEvent(6, code: 0, end: start + 1000, modelVersion: 0x0201_0003),
-             SleepEvent(timestamp: start, endTimestamp: start + 1000, confidence: nil, isPast: false, period: .night, modelVersion: "2.1.3")),
+            (decodedEvent(6, code: 4, end: start + 1000, modelVersion: 0x0201_0003),
+             SleepEvent(timestamp: start, endTimestamp: start + 1000, confidence: nil, isPast: false, period: .deep, modelVersion: "2.1.3")),
         ]
         for (decoded, expected) in cases {
             XCTAssertEqual(decoded.map { "\($0)" }, "\(expected)")
@@ -842,7 +991,7 @@ final class DeviceTests: XCTestCase {
 
     func testSleepPeriodFollowsTheCode() {
         let cases: [(code: Int32, period: SleepPeriod)] = [
-            (0, .night), (1, .wake), (2, .light), (3, .deep), (4, .rem), (5, .unknown), (-1, .unknown),
+            (0, .unknown), (1, .unknown), (2, .wake), (3, .light), (4, .deep), (5, .rem), (6, .unknown), (-1, .unknown),
         ]
         for (code, period) in cases {
             XCTAssertEqual((decodedEvent(6, code: code) as? SleepEvent)?.period, period, "\(code)")
@@ -869,16 +1018,20 @@ final class DeviceTests: XCTestCase {
         XCTAssertEqual(withoutEvents.transport.hostFrames.map(\.text), ["collect flags 00000001 00000100"])
     }
 
-    func testAidlab2CollectAlwaysSendsTheEventsMask() async throws {
-        let withEvents = await connect(firmware: "4.0.3")
-        acknowledgeCommands(withEvents.transport, pid: 1, processId: collectProcess)
-        _ = try await withEvents.device.collect(dataTypes: [.ecg], dataTypesToStore: [.heartRate],
-                                                events: [.ecg, .sleep])
-        XCTAssertEqual(withEvents.transport.hostFrames.map(\.text), ["collect flags 00000001 00000100 00000060"])
-
-        let withoutEvents = await connect(firmware: "4.0.3")
-        acknowledgeCommands(withoutEvents.transport, pid: 1, processId: collectProcess)
-        _ = try await withoutEvents.device.collect(dataTypes: [.ecg], dataTypesToStore: [.heartRate])
-        XCTAssertEqual(withoutEvents.transport.hostFrames.map(\.text), ["collect flags 00000001 00000100 00000000"])
+    func testAidlab2CollectSendsTheDataTypesAndDetectorsThatTheEventsNeed() async throws {
+        let cases: [(events: [DeviceEventType], command: String)] = [
+            ([.ecg, .sleep], "collect flags 00000001 00000100 00000060"),
+            ([], "collect flags 00000001 00000100 00000000"),
+            // Only the detectors of Aidlab 2 reach the events mask.
+            ([.wearState, .user, .ecg], "collect flags 00000001 00000100 00000020"),
+            // Activity adds its data type to the live and stored data.
+            ([.activity], "collect flags 00000021 00000120 00000000"),
+        ]
+        for (events, command) in cases {
+            let session = await connect(firmware: "4.0.3")
+            acknowledgeCommands(session.transport, pid: 1, processId: collectProcess)
+            _ = try await session.device.collect(dataTypes: [.ecg], dataTypesToStore: [.heartRate], events: events)
+            XCTAssertEqual(session.transport.hostFrames.map(\.text), [command], "\(events)")
+        }
     }
 }

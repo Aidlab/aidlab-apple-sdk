@@ -52,23 +52,29 @@ public protocol DeviceDelegate: AnyObject {
 
     func didUpdateRSSI(_ device: Device, rssi: Int32)
 
-    /// Called with wear-state changes, user events, exercises, activities and on-device ECG and sleep analysis, live
-    /// and from synchronization. Later SDK versions may add event types, so ignore the types you do not handle.
+    /// Called with wear-state changes, user events, exercises, activities and on-device ECG and sleep analysis. Events
+    /// are delivered live only when listed in the `events` of ``Device/collect(dataTypes:dataTypesToStore:events:)``;
+    /// events read through synchronization are always delivered. Later SDK versions may add event types, so ignore the
+    /// types you do not handle.
     func didReceiveEvent(_ device: Device, event: any DeviceEvent)
 
-    /// Called with each payload chunk received from a process (raw bytes).
+    /// Called with each stdout chunk of a process (raw bytes).
     /// - Parameters:
     ///   - device: The Aidlab device instance
     ///   - pid: Runtime process ID; 0 for system output or protocols without process IDs
     ///   - payload: Raw payload data as Data
     ///   - options: Process-specific metadata received from the device
-    func didReceivePayload(_ device: Device, pid: UInt16, payload: Data, options: UInt64)
+    func didReceiveProcessOutput(_ device: Device, pid: UInt16, payload: Data, options: UInt64)
 
     /// Called with stderr emitted by a device process. Aidlab 1 does not emit this callback.
     func didReceiveProcessError(_ device: Device, pid: UInt16, payload: Data, options: UInt64)
 
-    /// Called after the device reports that a runtime process has terminated.
-    func processDidTerminate(_ device: Device, pid: UInt16)
+    /// Called after the device reports that a runtime process has exited. All output and error callbacks of the PID
+    /// come before it.
+    ///
+    /// - Parameter exitStatus: The exit status of the process (0 on success), or `nil` when the firmware does not
+    ///   report it.
+    func processDidExit(_ device: Device, pid: UInt16, exitStatus: Int?)
 
     func didReceiveSignalQuality(_ device: Device, timestamp: UInt64, value: UInt8)
 
@@ -84,7 +90,7 @@ public protocol DeviceDelegate: AnyObject {
 
     func didReceivePastRr(_ device: Device, timestamp: UInt64, rr: Int32)
 
-    /// syncBytesPerSecond -> only available since firmware 3.7.69, in earlier versions it will be -1
+    /// syncBytesPerSecond -> -1 until measured, and always on firmware before 3.7.69
     func didReceiveUnsynchronizedSize(_ device: Device, unsynchronizedSize: UInt32, syncBytesPerSecond: Float)
 
     func didReceivePastRespirationRate(_ device: Device, timestamp: UInt64, value: UInt32)
@@ -139,9 +145,9 @@ public extension DeviceDelegate {
     func didReceiveSoundVolume(_: Device, timestamp _: UInt64, soundVolume _: UInt16) {}
     func didUpdateRSSI(_: Device, rssi _: Int32) {}
     func didReceiveEvent(_: Device, event _: any DeviceEvent) {}
-    func didReceivePayload(_: Device, pid _: UInt16, payload _: Data, options _: UInt64) {}
+    func didReceiveProcessOutput(_: Device, pid _: UInt16, payload _: Data, options _: UInt64) {}
     func didReceiveProcessError(_: Device, pid _: UInt16, payload _: Data, options _: UInt64) {}
-    func processDidTerminate(_: Device, pid _: UInt16) {}
+    func processDidExit(_: Device, pid _: UInt16, exitStatus _: Int?) {}
     func didReceiveSignalQuality(_: Device, timestamp _: UInt64, value _: UInt8) {}
     func syncStateDidChange(_: Device, state _: SyncState) {}
     func didReceivePastECG(_: Device, timestamp _: UInt64, value _: Float) {}

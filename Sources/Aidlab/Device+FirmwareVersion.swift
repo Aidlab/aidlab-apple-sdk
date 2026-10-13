@@ -36,6 +36,13 @@ extension Device {
         return current >= threshold
     }
 
+    /// Aidlab 1 up to 3.7.113 takes a new process slot for every `collect` sent to PID 0, and four exhaust its process
+    /// table, so commands for its running collect or sync go to their PIDs.
+    func sendsToServicePids() -> Bool {
+        guard let current = firmwareVersion, let lastNewSlotFirmware = SemVersion("3.7.113") else { return false }
+        return current <= lastNewSlotFirmware
+    }
+
     func hasCollectAutoSyncBug() -> Bool {
         guard let current = firmwareVersion,
               let firstAffected = SemVersion("3.7.84"),

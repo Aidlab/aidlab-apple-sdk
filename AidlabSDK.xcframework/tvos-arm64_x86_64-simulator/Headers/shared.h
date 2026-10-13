@@ -94,6 +94,8 @@ typedef enum {
     bodyPositionRightSide = 4
 } BodyPosition;
 
+/// The events the SDK reports. Events are delivered live only when listed in collect (AidlabSDK_set_events); events
+/// read through synchronization are always delivered.
 typedef enum {
     /// The wear state of the chest electrodes changed. `code` is the new WearState.
     eventTypeWearState = 0,
@@ -105,15 +107,16 @@ typedef enum {
     eventTypeExercise = 3,
     /// The wearer was doing an activity. `code` is the ActivityType.
     eventTypeActivity = 4,
-    /// One WFDB annotation of the device's ECG analysis, listed in the events to detect of collect. `code` is the WFDB
-    /// `anntyp`. A beat is a moment at its R peak: 1 normal (N), 5 premature ventricular contraction (V),
-    /// 9 supraventricular premature beat (S) or 13 unclassifiable (Q), with the probability of that class as
-    /// `confidence`. A rhythm or noise change is a period, reported once it ends: 28 (rhythm) with `aux` "(AFIB"
-    /// (atrial fibrillation) or "(SBR" (sinus bradycardia), or 14 (noise), whose `subtyp` marks unreadable signals in
-    /// its high four bits and noisy ones in its low four bits; the period ends at the return to "(N" or to `subtyp` 0.
+    /// One WFDB annotation of the device's ECG analysis. `code` is the WFDB `anntyp`. A beat is a moment at its R peak:
+    /// 1 normal (N), 5 premature ventricular contraction (V), 9 supraventricular premature beat (S) or 13
+    /// unclassifiable (Q), with the probability of that class as `confidence`. A rhythm or noise change is a period,
+    /// reported once it ends: 28 (rhythm) with `aux` "(AFIB" (atrial fibrillation) or "(SBR" (sinus bradycardia), or 14
+    /// (noise), whose `subtyp` marks unreadable signals in its high four bits and noisy ones in its low four bits; the
+    /// period ends at the return to "(N" or to `subtyp` 0.
     eventTypeEcg = 5,
-    /// A period of a night analyzed by the device, listed in the events to detect of collect. `code` is 0 for the night
-    /// from sleep onset to the final wake, or its stage: 1 wake, 2 light, 3 deep or 4 REM.
+    /// A period of a night analyzed by the device. `code` is its stage: 2 awake, 3 light, 4 deep or 5 REM; 1 is
+    /// reserved for sleep without a stage. A night is its periods: sleep onset is the start of its first period and the
+    /// final wake is the end of its last.
     eventTypeSleep = 6
 } EventType;
 
@@ -261,10 +264,23 @@ SHARED_EXPORT void AidlabSDK_init_callbacks(callbackSampleTime ecg, callbackSamp
 /// the data type with value `n`, as the collect flags do. Reserved data types are never supported.
 SHARED_EXPORT uint64_t AidlabSDK_unsupported_data_types(uint64_t dataTypes, const void* aidlabSDK);
 
-/// Returns the event types in `events` that this device cannot detect itself. Both masks set bit `n` for the EventType
-/// with value `n`, as the third mask of `collect flags <live> <store> <events>` does. Only eventTypeEcg and
-/// eventTypeSleep have on-device detectors, on Aidlab 2 (firmware 4.0.0 and newer).
+/// Returns the event types in `events` that the SDK cannot report for this device. Both masks set bit `n` for the
+/// EventType with value `n`. Each event type has a minimum firmware; eventTypeEcg and eventTypeSleep need Aidlab 2
+/// (firmware 4.0.0 and newer), and eventTypePressureWearState needs pressure, which only Aidmed One measures.
 SHARED_EXPORT uint64_t AidlabSDK_unsupported_events(uint64_t events, const void* aidlabSDK);
+
+/// Turns the data types and events requested from collect into the masks of `collect flags <live> <store> <events>`.
+/// `live` and `store` set bit `n` for the data type with value `n`, `events` bit `n` for the EventType with value `n`.
+/// Adds to `live` and `store` the data types the events need: activity (5) to both for eventTypeActivity, pressure to
+/// `live` for eventTypePressureWearState, motion and orientation to `live` for eventTypeExercise. Leaves in `events`
+/// only the on-device detectors, eventTypeEcg and eventTypeSleep.
+SHARED_EXPORT void AidlabSDK_collect_flags(uint64_t* live, uint64_t* store, uint64_t* events, const void* aidlabSDK);
+
+/// Sets the events the event callback reports live, as a mask with bit `n` for the EventType with value `n`, and
+/// returns the previous mask; other live events are dropped. Events read through synchronization are always reported.
+/// Collect sets the events it lists and restores the previous mask when it fails. A new instance reports no live
+/// events.
+SHARED_EXPORT uint64_t AidlabSDK_set_events(uint64_t events, void* aidlabSDK);
 
 /// Initializes the synchronization progress callbacks.
 SHARED_EXPORT void AidlabSDK_init_synchronization_callbacks(callbackSyncState syncState,
@@ -300,6 +316,7 @@ SHARED_EXPORT void AidlabSDK_set_error_callback(callbackError callback, void* co
 /// @param size Size of the payload buffer in bytes
 /// @param destination_pid Runtime destination PID for routing; use 0 for shell/system commands
 /// @param aidlabSDK Pointer to the Aidlab SDK instance
+/// @note An empty payload closes the process's stdin (end of file); to PID 0 it is an error.
 /// @note Requires callbackBLESend to be set via AidlabSDK_set_ble_send_callback()
 /// @note Each GATT write must be no larger than min(negotiated ATT MTU - 3, 512).
 /// @note SDK handles protocol framing - do not add headers manually

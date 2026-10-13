@@ -8,27 +8,30 @@ import Foundation
 
 /// Firmware before 3.6.0 streams every signal through its own characteristic.
 extension Device {
+    /// Data type 5, activity, which collect adds for ``DeviceEventType/activity``.
+    static let activityData = 5
+
     /// Firmware 2.2.6-3.5.x stores the signals whose flags `sync enable` sets. Earlier firmware stores every
     /// signal (2.2.2-2.2.4) or asks for each flag interactively (2.2.5).
     @MainActor
-    func configureLegacyStorage(_ dataTypes: [DataType]) async throws {
+    func configureLegacyStorage(_ syncFlags: UInt64) async throws {
         guard let current = firmwareVersion, let firstFlagFirmware = SemVersion("2.2.6"), current >= firstFlagFirmware else {
             return
         }
-        let signals: [(token: String, dataTypes: Set<DataType>)] = [
-            ("ecg", [.ecg]),
-            ("respir", [.respiration, .respirationRate]),
-            ("temper", [.skinTemperature]),
-            ("heartR", [.heartRate, .rr]),
-            ("orient", [.orientation, .bodyPosition]),
-            ("accel", [.motion]),
-            ("activi", [.activity]),
-            ("steps", [.steps]),
+        let signals: [(token: String, dataTypes: Set<Int>)] = [
+            ("ecg", [DataType.ecg.rawValue]),
+            ("respir", [DataType.respiration.rawValue, DataType.respirationRate.rawValue]),
+            ("temper", [DataType.skinTemperature.rawValue]),
+            ("heartR", [DataType.heartRate.rawValue, DataType.rr.rawValue]),
+            ("orient", [DataType.orientation.rawValue, DataType.bodyPosition.rawValue]),
+            ("accel", [DataType.motion.rawValue]),
+            ("activi", [Device.activityData]),
+            ("steps", [DataType.steps.rawValue]),
         ]
-        let requested = Set(dataTypes)
+        let requested = Device.bits(syncFlags)
         let unsupported = requested.subtracting(signals.flatMap(\.dataTypes))
         guard unsupported.isEmpty else {
-            let names = unsupported.map { "\($0)" }.sorted().joined(separator: ", ")
+            let names = unsupported.compactMap(DataType.init(rawValue:)).map { "\($0)" }.sorted().joined(separator: ", ")
             throw AidlabError(message: "Firmware \(firmwareRevision ?? "") cannot store \(names)")
         }
         for signal in signals {
@@ -74,10 +77,10 @@ extension Device {
         try await confirmation.wait()
     }
 
-    func startLegacyCollection(dataTypes: [DataType]) {
+    func startLegacyCollection(liveFlags: UInt64) {
         stopLegacyCollection()
         var uuids: Set<CBUUID> = []
-        for dataType in dataTypes {
+        for dataType in Device.bits(liveFlags) {
             if let uuid = dataTypesUUID[dataType] {
                 uuids.insert(uuid)
             }
@@ -93,6 +96,11 @@ extension Device {
                 }
             )
         }
+    }
+
+    /// The values whose bits `flags` sets.
+    private static func bits(_ flags: UInt64) -> Set<Int> {
+        Set((0 ..< flags.bitWidth).filter { flags >> $0 & 1 != 0 })
     }
 
     func stopLegacyCollection() {
