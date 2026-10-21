@@ -609,10 +609,13 @@ final class DeviceTests: XCTestCase {
     func testSyncStopsThroughTheShell() async throws {
         let session = await connect()
         let transport = session.transport
-        transport.onHostFrame = { [unowned transport] _ in
+        transport.onHostFrame = { [unowned transport] frame in
             transport.notify(ack)
-            // The shell answers `sync stop` like a built-in, with the sync PID; its `exited` follows.
+            // The shell answers `sync stop` like a built-in, with the sync PID; the stop ends with its `exited`.
             transport.lifecycle(pid: 4, processId: syncProcess)
+            if frame.text == "sync stop" {
+                transport.lifecycle(pid: 4, processId: syncProcess, status: exited)
+            }
         }
 
         let started = try await session.device.startSynchronization()
@@ -621,6 +624,115 @@ final class DeviceTests: XCTestCase {
         XCTAssertEqual(started, 4)
         XCTAssertEqual(stopped, 4)
         XCTAssertEqual(transport.hostFrames.map(\.pid), [0, 0])
+    }
+
+    func testSyncStopOnAidlab1From3_7_115LetsAClearFollowOnlyAfterTheSyncExits() async throws {
+        let session = await connect(firmware: "3.7.115")
+        let transport = session.transport
+        var exitSent = false
+        var clearSentAfterExit: Bool?
+        transport.onHostFrame = { [unowned transport] frame in
+            transport.notify(ack)
+            switch frame.text {
+            case "sync stop":
+                // 3.7.115 accepts the stop before the sync exits and rejects a clear until it does.
+                transport.lifecycle(pid: 4, processId: syncProcess)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak transport] in
+                    exitSent = true
+                    transport?.lifecycle(pid: 4, processId: syncProcess, status: exited)
+                }
+            case "sync clear":
+                clearSentAfterExit = exitSent
+                transport.lifecycle(pid: 5, processId: syncProcess)
+            default:
+                transport.lifecycle(pid: 4, processId: syncProcess)
+            }
+        }
+
+        _ = try await session.device.startSynchronization()
+        let stopped = try await session.device.stopSynchronization()
+        let cleared = try await session.device.clearSynchronization()
+
+        XCTAssertEqual(stopped, 4)
+        XCTAssertEqual(cleared, 5)
+        XCTAssertEqual(clearSentAfterExit, true)
+    }
+
+    func testSyncStopWhoseExitArrivesWithItsAcceptanceEndsAtOnce() async throws {
+        let session = await connect(firmware: "3.7.115")
+        let transport = session.transport
+        transport.onHostFrame = { [unowned transport] frame in
+            transport.notify(ack)
+            transport.lifecycle(pid: 4, processId: syncProcess)
+            if frame.text == "sync stop" {
+                transport.lifecycle(pid: 4, processId: syncProcess, status: exited)
+            }
+        }
+
+        _ = try await session.device.startSynchronization()
+        let stopped = try await session.device.stopSynchronization()
+
+        XCTAssertEqual(stopped, 4)
+    }
+
+    func testDisconnectFailsASyncStopWaitingForTheSyncExit() async throws {
+        let session = await connect(firmware: "3.7.115")
+        let transport = session.transport
+        transport.onHostFrame = { [unowned transport] frame in
+            transport.notify(ack)
+            transport.lifecycle(pid: 4, processId: syncProcess)
+            if frame.text == "sync stop" {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak transport] in transport?.disconnect() }
+            }
+        }
+        _ = try await session.device.startSynchronization()
+
+        do {
+            _ = try await session.device.stopSynchronization()
+            XCTFail("a disconnect must fail the stop")
+        } catch let error as AidlabError {
+            XCTAssertEqual(error.message, "Device disconnected")
+        }
+    }
+
+    func testSyncStopFailsWhenTheSyncIsKilledInsteadOfExiting() async throws {
+        let session = await connect(firmware: "3.7.115")
+        let transport = session.transport
+        transport.onHostFrame = { [unowned transport] frame in
+            transport.notify(ack)
+            transport.lifecycle(pid: 4, processId: syncProcess)
+            if frame.text == "sync stop" {
+                transport.lifecycle(pid: 4, processId: syncProcess, status: 3)
+            }
+        }
+        _ = try await session.device.startSynchronization()
+
+        do {
+            _ = try await session.device.stopSynchronization()
+            XCTFail("kill_failure must reject the stop")
+        } catch let error as AidlabError {
+            XCTAssertEqual(error.rejectionReason, .noSuchProcess)
+        }
+    }
+
+    func testSyncStopFailsWhenTheShellRejectsTheSyncInsteadOfExiting() async throws {
+        let session = await connect(firmware: "3.7.115")
+        let transport = session.transport
+        transport.onHostFrame = { [unowned transport] frame in
+            transport.notify(ack)
+            transport.lifecycle(pid: 4, processId: syncProcess)
+            if frame.text == "sync stop" {
+                transport.reply(pid: 0, [rejected, 4, 0, syncProcess, 6])
+            }
+        }
+        _ = try await session.device.startSynchronization()
+
+        do {
+            _ = try await session.device.stopSynchronization()
+            XCTFail("a rejection must fail the stop")
+        } catch let error as AidlabError {
+            XCTAssertEqual(error.rejectionReason, .busy)
+        }
     }
 
     func testStopOfASyncThatEndedReturnsNil() async throws {

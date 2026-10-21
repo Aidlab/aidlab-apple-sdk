@@ -92,6 +92,8 @@ public class Device: NSObject, @unchecked Sendable {
     static let syncProcessId: UInt8 = 7
     private static let collectProcessId: UInt8 = 8
     private static let frameConfirmationTimeout: TimeInterval = 3
+    // MTU 23: eight queued 3000-byte records need 48.32 s at 40 ms/notification; allow queue drain.
+    private static let syncExitTimeout: TimeInterval = 90
     private static let legacyCommandReceived = Data("RECEIVED".utf8)
 
     public var name: String?
@@ -339,7 +341,9 @@ public class Device: NSObject, @unchecked Sendable {
     }
 
     /// Stops sending stored data. Returns the PID of the stopped sync process, or `nil` when no synchronization runs
-    /// or on firmware before 2.2.18.
+    /// or on firmware before 2.2.18. Returns only after the sync process exits, so a following `clearSynchronization()`
+    /// cannot meet it. Allows 6 seconds for acceptance, then 90 seconds from acceptance for exit.
+    /// Service-PID commands allow 90 seconds for exit from send. Throws on timeout or disconnect.
     @MainActor
     public func stopSynchronization() async throws -> UInt16? {
         if !hasProcesses() {
@@ -349,8 +353,13 @@ public class Device: NSObject, @unchecked Sendable {
         if sendsToServicePids() {
             return try await sendActiveProcessCommand(commandBytes("sync stop"), pid: activePid)
         }
-        // Without a running sync the shell accepts the stop with PID 0, and no `exited` follows.
-        let stopped = try await sendProcessCommand(commandBytes("sync stop"), startedProcessId: Device.syncProcessId)
+        // Without a running sync the shell accepts the stop with PID 0, and no `exited` follows. Otherwise the stop ends
+        // with the sync's `exited`: Aidlab 1 from 3.7.115 rejects `sync clear` until the sync has exited.
+        let stopped = try await sendProcessCommand(
+            commandBytes("sync stop"),
+            startedProcessId: Device.syncProcessId,
+            waitsForExit: true
+        )
         return stopped == 0 ? nil : stopped
     }
 
@@ -791,18 +800,24 @@ public class Device: NSObject, @unchecked Sendable {
         let continuation: CheckedContinuation<SystemProcessResult?, Error>
         let startedProcessId: UInt8?
         let spawnedProcessId: UInt8?
+        /// Whether the command ends only once the process it names exits, as `sync stop` does.
+        let waitsForExit: Bool
         var responseReceived: Bool
         var response: SystemProcessResult?
+        /// The accepted PID whose `exited` ends the command.
+        var exitPid: UInt16?
 
         init(
             continuation: CheckedContinuation<SystemProcessResult?, Error>,
             startedProcessId: UInt8?,
             spawnedProcessId: UInt8?,
+            waitsForExit: Bool,
             responseReceived: Bool
         ) {
             self.continuation = continuation
             self.startedProcessId = startedProcessId
             self.spawnedProcessId = spawnedProcessId
+            self.waitsForExit = waitsForExit
             self.responseReceived = responseReceived
         }
 
@@ -836,7 +851,8 @@ public class Device: NSObject, @unchecked Sendable {
         startedProcessId: UInt8? = nil,
         spawnedProcessId: UInt8? = nil,
         destinationPid: UInt16 = 0,
-        raw: Bool = false
+        raw: Bool = false,
+        waitsForExit: Bool = false
     ) async throws -> UInt16? {
         await processCommandGate.lock()
         do {
@@ -846,7 +862,8 @@ public class Device: NSObject, @unchecked Sendable {
                 startedProcessId: startedProcessId,
                 spawnedProcessId: spawnedProcessId,
                 destinationPid: destinationPid,
-                raw: raw
+                raw: raw,
+                waitsForExit: waitsForExit
             )
             await processCommandGate.unlock()
             return pid
@@ -863,7 +880,8 @@ public class Device: NSObject, @unchecked Sendable {
         startedProcessId: UInt8?,
         spawnedProcessId: UInt8?,
         destinationPid: UInt16,
-        raw: Bool
+        raw: Bool,
+        waitsForExit: Bool = false
     ) async throws -> UInt16? {
         guard let aidlabSDK else {
             throw AidlabError(message: "Device is not connected")
@@ -881,6 +899,7 @@ public class Device: NSObject, @unchecked Sendable {
                 continuation: continuation,
                 startedProcessId: startedProcessId,
                 spawnedProcessId: spawnedProcessId,
+                waitsForExit: waitsForExit && expectsShellResponse,
                 responseReceived: !expectsShellResponse
             )
 
@@ -920,7 +939,7 @@ public class Device: NSObject, @unchecked Sendable {
 
             if waitsForLifecycle {
                 DispatchQueue.main.asyncAfter(deadline: .now() + timeoutSeconds) { [weak self, weak waiter] in
-                    guard let self, let waiter else { return }
+                    guard let self, let waiter, waiter.exitPid == nil else { return }
                     completePendingProcessCommand(
                         .failure(AidlabError(message: "Timed out waiting for process command result")),
                         waiter: waiter
@@ -950,8 +969,7 @@ public class Device: NSObject, @unchecked Sendable {
     @MainActor
     private func sendActiveProcessCommand(
         _ payload: [UInt8],
-        pid: UInt16,
-        timeoutSeconds: TimeInterval = 6
+        pid: UInt16
     ) async throws -> UInt16? {
         await processCommandGate.lock()
         let rejectionError: AidlabError
@@ -983,7 +1001,8 @@ public class Device: NSObject, @unchecked Sendable {
                     return
                 }
 
-                DispatchQueue.main.asyncAfter(deadline: .now() + timeoutSeconds) { [weak self, weak waiter] in
+                // Service-PID commands have no shell accepted response; start the exit budget at send.
+                DispatchQueue.main.asyncAfter(deadline: .now() + Self.syncExitTimeout) { [weak self, weak waiter] in
                     guard let self, let waiter else { return }
                     completePendingProcessTermination(
                         .failure(AidlabError(message: "Timed out waiting for process exit")),
@@ -1047,17 +1066,35 @@ public class Device: NSObject, @unchecked Sendable {
                 if waiter.answers(result) {
                     waiter.responseReceived = true
                     waiter.response = result
-                    if !result.accepted || waiter.spawnedProcessId == nil {
+                    if result.accepted, result.pid != 0, waiter.waitsForExit {
+                        // The command stays pending until this PID exits, which can follow in the same notification.
+                        waiter.exitPid = result.pid
+                        DispatchQueue.main.asyncAfter(deadline: .now() + Self.syncExitTimeout) { [weak self, weak waiter] in
+                            guard let self, let waiter else { return }
+                            completePendingProcessCommand(
+                                .failure(AidlabError(message: "Timed out waiting for process exit")),
+                                waiter: waiter
+                            )
+                        }
+                    } else if !result.accepted || waiter.spawnedProcessId == nil {
                         pendingProcessCommand = nil
                         commandCompletion = (waiter, .success(result))
                     }
                 }
-            } else if result.status == Device.systemRejected || result.processId == waiter.spawnedProcessId {
+            } else if waiter.spawnedProcessId != nil,
+                      result.status == Device.systemRejected || result.processId == waiter.spawnedProcessId {
                 // Firmware 3.7.84-3.7.110 starts a sync with collect and refuses it while another sync runs; the
                 // collect succeeded either way.
                 pendingProcessCommand = nil
                 commandCompletion = (waiter, .success(waiter.response))
             }
+        }
+
+        if commandCompletion == nil, result.status != Device.systemAccepted,
+           let waiter = pendingProcessCommand, let exitPid = waiter.exitPid, exitPid == result.pid {
+            // A sync stop ends with `exited`; `rejected` or kill_failure fails it, as the 2.8.0 model answers `kill`.
+            pendingProcessCommand = nil
+            commandCompletion = (waiter, .success(result.status == Device.systemExited ? waiter.response : result))
         }
 
         if let (waiter, completion) = commandCompletion {
