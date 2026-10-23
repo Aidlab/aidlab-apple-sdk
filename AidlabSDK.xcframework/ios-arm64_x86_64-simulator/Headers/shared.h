@@ -3,7 +3,7 @@
 //  Copyright © 2017-2026 Aidlab. All rights reserved.
 //
 //  Aidlab C++ SDK facilitates the process of exchanging information and receiving events from Aidlab and Aidmed One.
-//  The SDK offers packet compression mechanisms, backward compatibility, filtration, and simple data analysis.
+//  The SDK offers backward compatibility, filtration, and simple data analysis.
 //
 //  Note: Aidlab C++ SDK **does not** handle Bluetooth communication.
 //
@@ -222,7 +222,7 @@ SHARED_EXPORT void AidlabSDK_set_ble_frame_result_callback(callbackBLEFrameResul
 
 /// @brief Automatically detects protocol version and processes chunk accordingly:
 /// - V1-V3: Legacy header parsing and packet assembly
-/// - V4: Modern protocol with optional compression and per-frame ACK/NAK
+/// - V4: Modern protocol with per-frame ACK/NAK
 ///
 /// @param data Pointer to the received BLE chunk data
 /// @param size Size of the received chunk in bytes
